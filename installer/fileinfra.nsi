@@ -4,7 +4,7 @@ SetCompressor /SOLID lzma
 
 !define APP_NAME "FileInfra"
 !ifndef APP_VERSION
-  !define APP_VERSION "0.5.10"
+  !define APP_VERSION "0.5.12"
 !endif
 !define APP_PUBLISHER "zocs"
 !define APP_URL "https://github.com/zocs/fileinfra"

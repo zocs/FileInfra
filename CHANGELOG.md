@@ -3,6 +3,16 @@
 > 所有版本均可在 [GitHub Releases](https://github.com/zocs/fileinfra/releases) 下载。
 > All versions available at [GitHub Releases](https://github.com/zocs/fileinfra/releases).
 
+## [v0.5.12](https://github.com/zocs/fileinfra/releases/tag/v0.5.12) (2026-10)
+
+**中文：**
+- 🐛 修复工具页「复制到本机」复制到按钮文字而非共享内容的问题，并为不支持网页剪贴板 API 的 HTTP 页面增加回退。
+- 📖 更新中英文 README，补充工具页、共享剪贴板、Android 快捷控制及相关安全说明。
+
+**English:**
+- 🐛 Fixed the Tools page's "Copy to device" button copying its label instead of the shared text, with a fallback for HTTP pages where the browser Clipboard API is unavailable.
+- 📖 Updated the English and Chinese READMEs with the tools page, shared clipboard, Android quick controls, and security notes.
+
 ## [v0.5.11](https://github.com/zocs/fileinfra/releases/tag/v0.5.11) (2026-09)
 
 **中文：**
