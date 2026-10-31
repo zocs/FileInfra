@@ -497,6 +497,7 @@ var displayEl = document.getElementById('display');
 var timeEl = document.getElementById('time');
 var inputEl = document.getElementById('input');
 var reconnectTimer = null;
+var sharedText = '';
 
 function switchTab(name) {
   var panes = document.querySelectorAll('.pane');
@@ -568,7 +569,8 @@ function connect() {
     try {
       var msg = JSON.parse(e.data);
       if (msg.type === 'clipboard') {
-        displayEl.textContent = msg.text;
+        sharedText = msg.text;
+        displayEl.textContent = sharedText;
         if (msg.ts) {
           var d = new Date(msg.ts);
           timeEl.textContent = '同步于 ' + d.toLocaleString();
@@ -595,10 +597,27 @@ function send() {
   }
 }
 
-function copyFromDisplay() {
-  var text = displayEl.textContent;
+async function copyFromDisplay() {
+  var text = sharedText;
   if (!text) return;
-  navigator.clipboard.writeText(text).catch(function() {});
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      var copyInput = document.createElement('textarea');
+      copyInput.value = text;
+      copyInput.setAttribute('readonly', '');
+      copyInput.style.position = 'fixed';
+      copyInput.style.opacity = '0';
+      document.body.appendChild(copyInput);
+      copyInput.select();
+      var copied = document.execCommand('copy');
+      copyInput.remove();
+      if (!copied) throw new Error('Copy command failed');
+    }
+  } catch (err) {
+    window.prompt('请手动复制共享内容：', text);
+  }
 }
 
 addQrRow();

@@ -43,6 +43,8 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 | 📄 **Folder or single file** | Share a full directory or just one file |
 | ⬆️⬇️ **Bidirectional** | Upload AND download, not just send |
 | 🔗 **Just open a link** | QR code or URL — that's all the other side needs |
+| 📋 **Shared clipboard & tools page** | Sync text with browsers on the LAN and generate QR codes offline |
+| 📲 **Android quick controls** | Control the running server from the notification or Quick Settings tile |
 | 🔐 **Secure** | Optional password auth, CORS control |
 | 🔀 **Fine-grained permissions** | Upload, delete, search, archive download — toggle each one |
 | 🎨 **Customizable** | 6 color schemes + custom color wheel + dark / light mode |
@@ -87,7 +89,9 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 3. Scan QR code or enter URL in browser (port required)
 4. Share files — done!
 
-> Recent builds also add a smoother start/stop transition state, so slower devices feel less abrupt when the embedded file server is starting or shutting down.
+While the server is running, open the separate **Tools** URL in the app to use the LAN clipboard and offline QR generator. The clipboard endpoint uses the file-server port + 2000 (for example, file server `5000` → tools `7000`; it may move up if that port is unavailable). On Android, notification actions can send the device clipboard to the shared page or pull shared text back to the device; a Quick Settings tile can start or stop the last configured share.
+
+> Clipboard content is shared with anyone who can reach the tools URL on your network. Do not put passwords, tokens, or other sensitive information on it.
 
 ---
 
@@ -107,7 +111,7 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 
 ## 🔒 Security
 
-> ⚠️ FileInfra binds to all network interfaces by default (`0.0.0.0`)
+> ⚠️ The file server and tools page are reachable on the network interfaces they bind to (the file server listens on `0.0.0.0` by default).
 
 | Network | Recommendation |
 |:---|:---:|
@@ -117,9 +121,9 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 | Public internet | ❌ Not recommended — use VPN instead |
 
 **Best practices:**
-1. Enable auth in public environments
-2. Stop the server when done
-3. Review access logs periodically
+1. Enable password authentication on untrusted networks; configure upload/delete permissions conservatively.
+2. Remember that file-server authentication does not protect the separate clipboard/tools page.
+3. Stop the server when done and review access logs periodically.
 
 ---
 
@@ -197,7 +201,7 @@ A: No! Everything stays local. Transfers are device-to-device.
 
 ### Requirements
 
-- Flutter SDK 3.41+
+- Flutter SDK 3.47.0 (the CI build version)
 - Windows: VS Build Tools 2022 (C++ workload)
 - Android: Android SDK, NDK
 - Linux: clang, lld, llvm, libgtk-3-dev
