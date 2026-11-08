@@ -46,8 +46,8 @@ Builds:
   # 签名流程尚未验证，GitHub 构建通过不能代替这两项。
   - versionName: 0.5.13
     versionCode: 58
-    # Preparation candidate; repin to the next tested release before submission.
-    commit: 7223d39015ffa8d4406e701d0d85880615fb539c  # = tag v0.5.12 release commit
+    # Pin a previously published source commit to avoid a self-referencing SHA.
+    commit: f206653ed06226778eb0b7ead9414bbcd80fa823  # source 0.5.13+58
     sudo:
       - apt-get update
       # Native compilation needs a C toolchain. The 0.47 fork uses ring;
