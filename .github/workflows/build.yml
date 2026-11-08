@@ -113,6 +113,9 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
       - run: flutter pub get
+      - name: Initialize Android Gradle wrapper
+        # Flutter generates the ignored wrapper scripts/JAR in a fresh checkout.
+        run: flutter build apk --debug --config-only --no-pub
       - name: Android notification and activity regressions
         working-directory: android
         run: ./gradlew :app:testDebugUnitTest --console=plain
