@@ -56,3 +56,24 @@
 - [ ] 测试安装：Android 升级安装、Windows 覆盖安装
 - [ ] 若本次用户要求 LAN 交付，按指定平台打 ZIP、附校验值和架构说明，上传指定 FileInfra 服务并核对远端长度/哈希
 - [ ] 发布、上传与后续审查修复结果写回所有当前文档；如有未完成项，记录具体原因与下一步
+
+## v0.5.13 执行记录（2026-11-09）
+
+以下是本次实际结果，上方仍作为以后发版的通用模板。
+
+| 检查 | 实际结果 |
+|---|---|
+| 版本与 tag | 项目 `0.5.13+58`；新标签 `v0.5.13` 指向已验证的 `7da4eee090ac2bfa9dfd4a38cceb440b2428289a`，未移动旧 tag |
+| 审查与上游 | 完整维护源码两轮 151/151、154/154，后续变更另行复核；dufs main 合并上游 `ec4ea01`，固定最终公开源码 `8e8cce6` |
+| CI | [分支 CI](https://github.com/zocs/FileInfra/actions/runs/42529814093) 必需 9/9；[标签 CI](https://github.com/zocs/FileInfra/actions/runs/42531076830) 含自动 Release 10/10 |
+| 回归 | Flutter 151、Android 原生 22、脚本 28、Python 打包 32；dufs 默认/无 TLS 本地 395/388，最终三系统 CI 均通过 |
+| 实际运行 | Windows 便携 GUI/三个包内 VC++ DLL/FFI；macOS ARM64 与 Rosetta Intel FFI；Linux x64/ARM64 FFI；干净 Ubuntu 18.04 apt 安装实际 deb 后验证 deb/AppImage 窗口和持续运行 |
+| 发布 | [正式 Release](https://github.com/zocs/FileInfra/releases/tag/v0.5.13) 于 06:48 发布，21 个附件齐全；校验文件与全部附件名及 GitHub SHA-256 一致 |
+| 下载验证 | 实际下载 Windows x64 ZIP、Linux x64 compat AppImage/deb、Android arm64；核对大小/哈希/架构、原签名、API 24/核心 4 KB 对齐与 deb 依赖，下载的 compat 核心另跑 HTTP 操作和三次重启 |
+| Android 版本码 | 实际四 APK 为 universal 58、armv7 1058、arm64 2058、x86_64 4058，同类型分别比旧版加 1；所有新 APK 均为原证书 `e4db9054…aed6a`。更新时保持相同 APK 类型，F-Droid 配方使用基础/universal 58 |
+| F-Droid | 固定公开且含无签名支持的 `f206653`；预检 23 PASS / 3 WARN / 0 FAIL；未运行完整 builder 或提交上架 |
+| LAN 交付 | ZIP 与校验文件 HTTP 201；57,186,666 字节，远端完整回读 SHA-256 一致，07:01 完成，早于 07:15；具体地址和收据保留在本地 `docs/` |
+
+交付 ZIP SHA-256：`9cd6c8fdd79970d822b86ef639476fb553410fd6e90d8e61f4e1fab1f9ced02f`。
+
+Windows 32 位 x86 Flutter GUI 不受 SDK 支持，未提供此包。Android 16 KB 页设备、实际升级安装、Linux 实体桌面与 macOS 真机仍需另行验证；macOS 未做 Developer ID/公证，iOS 仅实验性无签名产物。这些范围没有以源码审查或 CI 编译替代实测。

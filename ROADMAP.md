@@ -2,7 +2,7 @@
 
 ## Current Status (2026-11-09)
 
-Latest published release: **v0.5.12**. The current **v0.5.13+58** candidate contains the reviewed UI/clipboard/lifecycle fixes, dufs 0.47 upstream merge, desktop packaging corrections and expanded CI gates. Full-source review and final branch/release validation are in progress; publication and delivery will be recorded after they complete.
+Latest published release: [**v0.5.13**](https://github.com/zocs/FileInfra/releases/tag/v0.5.13), project build **58**. Two complete maintained-source reviews and subsequent focused fixes are complete. The tested dufs 0.47 fork/upstream merge and FileInfra changes are merged; [branch CI](https://github.com/zocs/FileInfra/actions/runs/42529814093) passed all nine required jobs, and [tag CI](https://github.com/zocs/FileInfra/actions/runs/42531076830) passed all ten build/test/release jobs. The requested Windows x64, Linux x64 compat AppImage/deb and Android arm64 ZIP was delivered to the user's LAN service and fully verified by length and SHA-256 at 07:01 Asia/Shanghai, before the 07:15 target.
 
 Windows distribution is x64; Flutter has no Windows 32-bit x86 target. Linux x64 compat targets glibc 2.27, while normal x64/ARM64 packages declare actual ELF dependencies. macOS targets 13.0 and uses ad-hoc signatures without Developer ID/notarization. iOS is an experimental unsigned build. F-Droid preparation exists, but submission is postponed.
 
@@ -19,15 +19,16 @@ Windows distribution is x64; Flutter has no Windows 32-bit x86 target. Linux x64
 - [x] **v0.5.10** (2026-09): native Linux directory chooser and automatic release artifact-download fix
 - [x] **v0.5.11** (2026-09): Ubuntu 18.04 compat directory chooser environment/argument/exit handling
 - [x] **v0.5.12** (2026-10): copied clipboard text separated from timestamps, tools/Android documentation
+- [x] **v0.5.13** (2026-11-09): dufs 0.47/upstream security fixes, exact clipboard and lifecycle/configuration fixes, reviewed UI, Windows runtimes, Linux graphics dependencies/compat GUI, macOS Intel packaging and expanded CI
 
-### v0.5.13 candidate
+### v0.5.13 verification and delivery
 - [x] Review the previous macOS/UI changes and preserve justified fixes
 - [x] Exact clipboard text, ES5 tools page, copy fallback/manual recovery and Origin/body limits
 - [x] Typed configuration recovery, real filesystem containment and setup appearance propagation
 - [x] Private AppImage staging, app-local Windows runtimes, Linux dependency/ownership and macOS seal checks
-- [ ] Finish review follow-ups, full regression and cross-platform CI
-- [ ] Merge tested upstream/fork and FileInfra changes, publish fresh patch tag and verify release assets
-- [ ] Deliver requested platform ZIP and record final checksums/results
+- [x] Finish review follow-ups, full regression and cross-platform CI
+- [x] Merge tested upstream/fork and FileInfra changes, publish fresh patch tag and verify release assets
+- [x] Deliver Windows x64/Linux x64 compat/Android arm64 ZIP and record final checksums/results; Windows 32-bit x86 remains unsupported by the SDK
 
 ### Completed since last roadmap update
 - [x] CI cache & checksums.txt generation

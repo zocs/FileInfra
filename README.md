@@ -25,6 +25,8 @@
 
 A Dufs-based, lightweight cross-platform file distribution GUI optimized for **air-gapped LANs and restricted industrial environments**. Built on [dufs](https://github.com/sigoden/dufs). **Zero config, zero barrier** — share a folder or a single file from one device, and anyone with a browser can access and transfer it. The other side needs no app.
 
+Latest release: [v0.5.13](https://github.com/zocs/FileInfra/releases/tag/v0.5.13) updates the file-server core, fixes clipboard and Android lifecycle behavior, and improves desktop packaging. All required [release build and verification jobs](https://github.com/zocs/FileInfra/actions/runs/42531076830) passed.
+
 ---
 
 ## 📱 Screenshots
@@ -80,6 +82,8 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 | 🍎 **macOS (Intel)** | `FileInfra-*-macos-x64.zip` | macOS 13+; device testing pending |
 
 > 📥 [Download latest release](https://github.com/zocs/fileinfra/releases)
+
+For Android updates, keep the same APK variant you previously installed. Flutter assigns higher version codes to per-ABI APKs: v0.5.13 uses `58` for universal and `2058` for arm64 (previous arm64: `2057`). Switching from a per-ABI APK to universal can be rejected as a version downgrade even when the signing certificate matches.
 >
 > F-Droid metadata and an unsigned build path are prepared. Submission is postponed; FileInfra is not currently available in the F-Droid catalog.
 
@@ -269,7 +273,7 @@ Notes:
 
 ### CI/CD
 
-GitHub Actions runs analysis, Flutter/browser regressions, native Android tests, packaging checks and builds on manual dispatch or a tag push. Release tags (`v*`) publish only after all required jobs pass. Verify the branch first with `gh workflow run build.yml --ref <branch> -f note="<purpose>"`; release downloads include SHA-256 checksums. See [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) for the complete sequence.
+GitHub Actions runs analysis, Flutter/browser regressions, native Android tests, packaging checks and builds on manual dispatch or a tag push. It also checks packaged Windows startup/native runtimes and actual deb/AppImage windows in a fresh Ubuntu 18.04 desktop. Release tags (`v*`) publish only after all required jobs pass. Verify the branch first with `gh workflow run build.yml --ref <branch> -f note="<purpose>"`; release downloads include SHA-256 checksums. See [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) for the sequence and actual release verification record.
 
 ### Project Structure
 

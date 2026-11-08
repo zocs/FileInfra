@@ -25,6 +25,8 @@
 
 基于 [dufs](https://github.com/sigoden/dufs) 的图形分发工具，专为**气密局域网 / 工业离线环境**优化。**零配置，零参数**——仅需在一台设备安装 FileInfra，分享一个文件夹或单个文件，其他设备打开浏览器访问分享页即可轻松上传下载。
 
+最新版本 [v0.5.13](https://github.com/zocs/FileInfra/releases/tag/v0.5.13)：更新文件服务核心，修复剪贴板与 Android 启停/恢复，完善桌面打包。[发布构建与验证任务](https://github.com/zocs/FileInfra/actions/runs/42531076830) 已全部通过。
+
 ---
 
 ## 📱 截图
@@ -80,6 +82,8 @@
 | 🍎 **macOS（Intel）** | `FileInfra-*-macos-x64.zip` | macOS 13+；待实机验证 |
 
 > 📥 [去 Releases 下载最新版](https://github.com/zocs/fileinfra/releases)
+
+Android 更新时请保持之前安装的 APK 类型。Flutter 为分架构 APK 增加版本码偏移：v0.5.13 的 universal 为 `58`，arm64 为 `2058`（旧版 arm64 为 `2057`）。从分架构包切换到 universal，可能因版本码更低而无法覆盖安装，即使签名证书相同。
 >
 > F-Droid 配方和无签名构建路径已准备，上架已推迟，目前未在 F-Droid 目录提供下载。
 
@@ -246,7 +250,7 @@ bash scripts/build_macos.sh x86_64
 
 ### CI/CD
 
-GitHub Actions 在手动触发或推送 tag 时运行分析、Flutter/浏览器回归、Android 原生测试、打包检查和各平台构建。发布 tag（`v*`）只有在全部必需任务通过后才创建 release。先用 `gh workflow run build.yml --ref <branch> -f note="<用途>"` 验证分支；下载产物附带 SHA-256 校验文件。完整流程见 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)。
+GitHub Actions 在手动触发或推送 tag 时运行分析、Flutter/浏览器回归、Android 原生测试、打包检查和各平台构建，也验证 Windows 实际便携启动/原生运行库，以及干净 Ubuntu 18.04 桌面中的实际 deb/AppImage 窗口。发布 tag（`v*`）只有在全部必需任务通过后才创建 release。先用 `gh workflow run build.yml --ref <branch> -f note="<用途>"` 验证分支；下载产物附带 SHA-256 校验文件。流程与实际发布记录见 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)。
 
 ### 项目结构
 
