@@ -197,6 +197,8 @@ DEB_DIR="${OUTPUT_DIR}/${APP_NAME}-deb"
 rm -rf "${DEB_DIR}"
 mkdir -p "${DEB_DIR}/DEBIAN" "${DEB_DIR}/opt/${APP_NAME}" "${DEB_DIR}/usr/share/applications" "${DEB_DIR}/usr/bin"
 
+# libepoxy loads EGL/GLES with dlopen; ELF imports do not declare these runtimes.
+# Keep them explicit so a minimal desktop can launch the installed GUI.
 # Control file
 cat > "${DEB_DIR}/DEBIAN/control" << CONTROL
 Package: ${APP_NAME}
@@ -204,7 +206,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
-Depends: ${NATIVE_DEPENDS}, libgtk-3-0, libglib2.0-0, libsecret-1-0, libayatana-appindicator3-1
+Depends: ${NATIVE_DEPENDS}, libgtk-3-0, libglib2.0-0, libsecret-1-0, libayatana-appindicator3-1, libegl1, libgles1, libgles2
 Maintainer: zocs <zocs@live.com>
 Description: One-tap LAN file sharing via browser
  A Dufs-based, lightweight cross-platform file distribution GUI optimized
@@ -261,7 +263,7 @@ Version: ${VERSION}
 Release: 1
 Summary: One-tap LAN file sharing via browser
 License: MIT
-Requires: gtk3 glib2
+Requires: gtk3 glib2 libEGL.so.1()(64bit) libGLESv1_CM.so.1()(64bit) libGLESv2.so.2()(64bit)
 
 %description
 A Dufs-based, lightweight cross-platform file distribution GUI optimized

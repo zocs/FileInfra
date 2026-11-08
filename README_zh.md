@@ -156,7 +156,7 @@ chmod +x fileinfra-*.AppImage
 ./fileinfra-*.AppImage
 ```
 
-按发行版安装 FUSE 运行库，或使用 AppImage 的 `--appimage-extract-and-run` 选项。若报错包含 `GLIBC_*` 或 `GLIBCXX_*`，请选择 x64 compat 包或更新发行版；安装 FUSE 不能解决系统 C 库版本不兼容。
+按发行版安装 FUSE 运行库，或使用 AppImage 的 `--appimage-extract-and-run` 选项。AppImage 和 tar 包还需要可用的图形驱动与 EGL/GLES 运行库；Debian/Ubuntu 缺少这些库时安装 `libegl1 libgles1 libgles2`，deb 已声明对应依赖。若报错包含 `GLIBC_*` 或 `GLIBCXX_*`，请选择 x64 compat 包或更新发行版；安装 FUSE 不能解决系统 C 库版本不兼容。
 
 ### macOS — 提示"无法验证开发者"
 

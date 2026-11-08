@@ -158,7 +158,7 @@ chmod +x fileinfra-*.AppImage
 ./fileinfra-*.AppImage
 ```
 
-Install the FUSE runtime required by your distribution, or use the AppImage's `--appimage-extract-and-run` option. If the error mentions `GLIBC_*` or `GLIBCXX_*`, use the x64 compat package or a newer distribution; installing FUSE cannot fix an incompatible system C library.
+Install the FUSE runtime required by your distribution, or use the AppImage's `--appimage-extract-and-run` option. AppImage and tar bundles also need a working graphics driver and EGL/GLES runtime libraries; on Debian/Ubuntu, install `libegl1 libgles1 libgles2` if they are missing. The deb declares these dependencies. If the error mentions `GLIBC_*` or `GLIBCXX_*`, use the x64 compat package or a newer distribution; installing FUSE cannot fix an incompatible system C library.
 
 ### macOS — Developer Verification Blocked
 

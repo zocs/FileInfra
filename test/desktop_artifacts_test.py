@@ -160,6 +160,15 @@ function /tmp/linuxdeploy-aarch64() { : > "$OUTPUT"; }
         self.assertIsNotNone(match, depends)
         self.assertLessEqual(float(match.group(1)), 6.0)
 
+    def test_deb_declares_graphics_libraries_loaded_indirectly_by_libepoxy(self):
+        for arch in ("x86_64", "aarch64"):
+            with self.subTest(arch=arch):
+                self.make_bundle(arch)
+                self.package(arch)
+                depends = run("dpkg-deb", "-f", str(self.deb(arch)), "Depends").stdout
+                packages = {entry.strip().split(" ")[0] for entry in depends.split(",")}
+                self.assertTrue({"libegl1", "libgles1", "libgles2"}.issubset(packages), depends)
+
     def test_compat_rejects_newer_elf_instead_of_mislabeling_the_package(self):
         self.make_bundle()
         self.env["FILEINFRA_ARCHIVE_SUFFIX"] = "-compat"
@@ -214,6 +223,9 @@ function /tmp/linuxdeploy-aarch64() { : > "$OUTPUT"; }
         database.mkdir()
         metadata = run("rpm", "--dbpath", str(database), "-qp", "--qf", "%{NAME} %{VERSION}", str(package)).stdout
         self.assertEqual(metadata, "fileinfra 0.5.12")
+        requires = run("rpm", "--dbpath", str(database), "-qp", "--requires", str(package)).stdout.splitlines()
+        self.assertTrue({"libEGL.so.1()(64bit)", "libGLESv1_CM.so.1()(64bit)",
+                         "libGLESv2.so.2()(64bit)"}.issubset(set(requires)), requires)
         files = run("rpm", "--dbpath", str(database), "-qpl", str(package)).stdout.splitlines()
         self.assertIn("/opt/fileinfra/libdufs.so", files)
         self.assertIn("/usr/bin/fileinfra", files)

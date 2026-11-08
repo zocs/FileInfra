@@ -15,4 +15,4 @@
 
 > 🍎 macOS has no Developer ID signature or notarization. If Gatekeeper blocks a trusted download, extract it and run `xattr -cr FileInfra.app`. iOS is an experimental unsigned build, with installation/file-server operation unverified.
 >
-> Windows GUI packages are x64; Flutter does not support Windows 32-bit x86. Linux AppImage still requires compatible system libraries; `.deb` declares the actual ELF dependency floor. SHA-256 checksums use the release filenames and can be checked after a flat download.
+> Windows GUI packages are x64; Flutter does not support Windows 32-bit x86. Linux AppImage/tar bundles require compatible system libraries and working EGL/GLES graphics drivers; `.deb` declares the runtime libraries and actual ELF dependency floor. SHA-256 checksums use the release filenames and can be checked after a flat download.

@@ -216,13 +216,7 @@ jobs:
         if: env.ANDROID_KEYSTORE_AVAILABLE == 'true'
         run: |
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
-          for APK in fileinfra-*-android-*.apk; do
-            CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-            if [ "$CERT" != "$ANDROID_RELEASE_CERT_SHA256" ]; then
-              echo "::error::$APK does not use the existing FileInfra signing certificate"
-              exit 1
-            fi
-          done
+          python3 scripts/verify_android_signing.py "$APKSIGNER" "$ANDROID_RELEASE_CERT_SHA256" fileinfra-*-android-*.apk
       - uses: actions/upload-artifact@v7
         with:
           name: android
@@ -400,6 +394,20 @@ jobs:
             bash -ec 'cd /src
               bash scripts/build_linux.sh x86_64
               python3 scripts/verify_dufs_ffi.py /out/fileinfra/libdufs.so'
+      - name: Verify compat GUI in minimal Ubuntu 18.04
+        # Install the actual deb. EGL/GLES must come from its dependencies;
+        # Mesa DRI supplies the software graphics driver for the Xvfb test.
+        run: |
+          docker run --rm --network host \
+            -v /tmp/compat-out:/packages:ro \
+            -v "${{ github.workspace }}/scripts/verify_linux_gui.py:/verify_linux_gui.py:ro" \
+            ubuntu:18.04 bash -ec '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y python3 xvfb xauth x11-utils dbus-x11 \
+                libgl1-mesa-dri libgl1-mesa-glx /packages/fileinfra-*-compat-linux-x86_64.deb
+              python3 /verify_linux_gui.py /usr/bin/fileinfra
+              python3 /verify_linux_gui.py /packages/fileinfra-*-compat-linux-x86_64.AppImage --appimage-extract-and-run'
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x64-compat
