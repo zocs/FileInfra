@@ -31,27 +31,27 @@ Description: |-
   * Customizable permissions (read-only, upload, full)
   * Multi-language support (English, 简体中文, 繁體中文)
   * Material 3 design
+  * Shared LAN clipboard and offline QR tools page
+  * Android notification and Quick Settings start/stop controls
 
-  Your files stay on your local network — nothing leaves your device.
+  Files and shared clipboard text go directly to the peers you connect to.
+  No analytics or cloud relay is used. HTTP content is unencrypted, and the
+  separate tools page is not protected by the file-server password.
 
 RepoType: git
 Repo: https://github.com/zocs/fileinfra
 
 Builds:
-  # 0.5.5 起才有可复现的 Android 构建；更早版本的历史被 rewrite 过（见
-  # docs/handoff.md 的 rename 一节），不回填。
-  - versionName: 0.5.12
-    versionCode: 57
-    # 发布后回填，见 fdroid 回填 commit
+  # 旧配方从 0.5.5 开始记录；历史不回填。完整 F-Droid builder 与可复现
+  # 签名流程尚未验证，GitHub 构建通过不能代替这两项。
+  - versionName: 0.5.13
+    versionCode: 58
+    # Preparation candidate; repin to the next tested release before submission.
     commit: 7223d39015ffa8d4406e701d0d85880615fb539c  # = tag v0.5.12 release commit
     sudo:
       - apt-get update
-      # cmake：dufs 默认开 `tls` feature → rustls 0.23 的 aws-lc-sys 会被编译，
-      #       它的 build.rs 需要 CMake + 一个 C 编译器。
-      # build-essential：同上，提供 cc。
-      # （原来这里写的是 protobuf-compiler，dufs 依赖树里没有任何 protobuf，
-      #   是从别的工程抄来的；CI 一直没暴露这个问题，因为 GitHub 的
-      #   ubuntu-latest runner 自带 cmake。）
+      # Native compilation needs a C toolchain. The 0.47 fork uses ring;
+      # CMake is retained for the wider native/Flutter build environment.
       - apt-get install -y cmake build-essential
     output: build/app/outputs/flutter-apk/app-release.apk
     srclibs:
@@ -60,10 +60,9 @@ Builds:
       # （handoff 里「本地 Flutter ≠ CI」踩过好几次）。
       - flutter@3.47.0
     prebuild:
-      # 工具链版本与 CI 的 dtolnay/rust-toolchain@stable 对齐（CI 当时解析到
-      # 1.98.x）。发版时如果 CI 的 stable 升了，这里要一起升。
+      # 与 CI 显式固定的 RUST_VERSION 对齐。
       - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain
-        1.98.0 --profile minimal --no-modify-path
+        1.99.1 --profile minimal --no-modify-path
       - source "$HOME/.cargo/env"
       # 三个 ABI 都要：`flutter build apk` 出的是 universal APK，缺哪个 ABI
       # 的 libdufs.so，那个 ABI 的设备装上就是一句「dufs 服务组件缺失」。
@@ -84,16 +83,20 @@ Builds:
       - .pub-cache
     build:
       - export PUB_CACHE="$(pwd)/.pub-cache"
-      - $$flutter$$/bin/flutter build apk --release --build-name=0.5.12 --build-number=57
+      - export FILEINFRA_UNSIGNED_RELEASE=1
+      - $$flutter$$/bin/flutter build apk --release
     # 与 CI 的 EXPECTED_NDK_MAJOR 一致。注意：真正保证老设备能加载的是
     # scripts/build_dufs.sh 里强制的 -Wl,-z,max-page-size=0x1000 +
     # --pack-dyn-relocs=none，CI 的 page-alignment guard 会校验；NDK 版本本身
-    # 换大版本时只需确认 guard 仍然通过。
+    # 换大版本时需重新编译/检查三个 ABI，并另外记录设备兼容验证。
     ndk: r29
 
-AllowedAPKSigningKeys: e4db9054ff7070e4bee3387e928e1388facfec0526da10e4510282e9d26aed6a
+# Default F-Droid signing uses a different certificate from GitHub APKs.
+# Developer-signature continuity requires reproducible upstream Binaries,
+# not merely the public AllowedAPKSigningKeys fingerprint.
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 0.5.12
-CurrentVersionCode: 57
+UpdateCheckData: 'pubspec.yaml|version:\s+[^\s+]+\+(\d+)|.|version:\s+([^\s+]+)\+'
+CurrentVersion: 0.5.13
+CurrentVersionCode: 58

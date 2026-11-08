@@ -2,7 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- FileInfra is a LAN file server distributed outside the Mac App Store.
+	     Inside the App Sandbox the embedded dufs could not accept incoming
+	     connections (the Flutter template grants network.server to Debug
+	     only) nor reopen a previously shared directory after a relaunch
+	     (no security-scoped bookmarks), so run unsandboxed like the Windows
+	     and Linux builds. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 </dict>
 </plist>

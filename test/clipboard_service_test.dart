@@ -105,7 +105,7 @@ void main() {
     final dummy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final dufsPort = dummy.port;
 
-    // 占满 dufsPort+1000 ~ dufsPort+1009（= 全部 10 个候选端口）
+    // 占满 dufsPort+portOffset 起的全部 10 个候选端口。
     final blockers = <HttpServer>[];
     for (var i = 0; i <= ClipboardService.maxBump; i++) {
       final s = await HttpServer.bind(InternetAddress.loopbackIPv4, dufsPort + ClipboardService.portOffset + i);
@@ -426,11 +426,14 @@ void main() {
 
     // 发送者：先发二进制帧，再发文本帧。
     final sender = await WebSocket.connect('ws://127.0.0.1:$cbPort/');
-    // 接收者：广播排除发送者自身，须另开连接观察。
+    // 另开接收连接，验证二进制帧之后的文本仍可同步。
     final receiver = await WebSocket.connect('ws://127.0.0.1:$cbPort/');
     final received = Completer<String>();
     receiver.listen((data) {
-      if (data is String && !received.isCompleted) received.complete(data);
+      if (data is String && !received.isCompleted &&
+          jsonDecode(data)['text'] == 'after-binary') {
+        received.complete(data);
+      }
     });
 
     // 二进制帧应被忽略（服务端仅处理文本帧），不崩溃。

@@ -30,6 +30,10 @@ class _ColorPickerDialogState extends State<ColorPickerDialog> {
   Widget build(BuildContext context) {
     final hueColor = HSVColor.fromAHSV(1, _hsv.hue, 1, 1).toColor();
     return AlertDialog(
+      // A bounded width avoids intrinsic measurement of the drag panels'
+      // LayoutBuilders; parent constraints still shrink this on narrow screens.
+      constraints: const BoxConstraints.tightFor(width: 348),
+      scrollable: true,
       title: Text(widget.title),
       content: SizedBox(
         width: 300,
@@ -186,43 +190,54 @@ class _HueBar extends StatelessWidget {
         }
 
         return GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onPanDown: (d) => update(d.localPosition),
           onPanUpdate: (d) => update(d.localPosition),
           child: SizedBox(
-            height: 24,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      gradient: LinearGradient(
-                        colors: [
-                          for (var h = 0; h <= 360; h += 60)
-                            HSVColor.fromAHSV(1, h.toDouble(), 1, 1).toColor(),
-                        ],
+            height: 48,
+            child: Center(
+              child: SizedBox(
+                height: 24,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          gradient: LinearGradient(
+                            colors: [
+                              for (var h = 0; h <= 360; h += 60)
+                                HSVColor.fromAHSV(
+                                  1,
+                                  h.toDouble(),
+                                  1,
+                                  1,
+                                ).toColor(),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                Positioned(
-                  left: math.min((hsv.hue / 360) * w - 8, w - 16),
-                  top: 4,
-                  child: IgnorePointer(
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black45, blurRadius: 2),
-                        ],
+                    Positioned(
+                      left: math.min((hsv.hue / 360) * w - 8, w - 16),
+                      top: 4,
+                      child: IgnorePointer(
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black45, blurRadius: 2),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         );

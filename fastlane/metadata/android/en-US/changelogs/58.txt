@@ -1,0 +1,4 @@
+Updated the file-server core and fixed authenticated move/copy and permission checks.
+Fixed exact clipboard copying, older-browser support and manual copy recovery.
+Fixed Android start/stop, notification clipboard and restored settings.
+Improved small-screen controls and desktop packaging.

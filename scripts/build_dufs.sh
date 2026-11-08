@@ -7,7 +7,7 @@
 # The output is a .so / .dll / .dylib that exposes dufs_start / dufs_stop / dufs_is_running.
 set -euo pipefail
 
-DUFS_VERSION="v0.46.0-fix5"
+DUFS_VERSION="8e8cce6a260a86748e6066352eba8face004155e"
 DUFS_REPO="https://github.com/zocs/dufs.git"
 PLATFORM=${1:?Usage: $0 <platform>}
 
@@ -45,27 +45,55 @@ if ! command -v cargo &> /dev/null; then
   source "$HOME/.cargo/env"
 fi
 
-# Clone dufs source
-DUFS_SRC="/tmp/dufs-src-${DUFS_VERSION}"
+# Fetch the literal source pin: either a release tag or a full commit SHA.
+# TMPDIR keeps isolated builds/tests out of the shared default cache.
+DUFS_SRC="${TMPDIR:-/tmp}/dufs-src-${DUFS_VERSION}"
+DUFS_PINNED_SHA=""
+if [[ "$DUFS_VERSION" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  DUFS_PINNED_SHA="$(printf '%s' "$DUFS_VERSION" | tr '[:upper:]' '[:lower:]')"
+fi
+
+refresh_dufs_checkout() {
+  # A restored cache may still point at a different fork or an old URL.
+  git -C "$DUFS_SRC" remote set-url origin "$DUFS_REPO" || return 1
+  if [ -n "$DUFS_PINNED_SHA" ]; then
+    git -C "$DUFS_SRC" fetch --depth 1 --force origin "$DUFS_PINNED_SHA" || return 1
+    if [ "$(git -C "$DUFS_SRC" rev-parse 'FETCH_HEAD^{commit}')" != "$DUFS_PINNED_SHA" ]; then
+      echo "ERROR: fetched dufs commit does not match ${DUFS_PINNED_SHA}" >&2
+      return 1
+    fi
+    git -C "$DUFS_SRC" checkout --detach --force "$DUFS_PINNED_SHA" || return 1
+  else
+    # Forced refspec refresh preserves support for a fork re-tagging a release.
+    git -C "$DUFS_SRC" fetch --depth 1 --force origin \
+      "refs/tags/${DUFS_VERSION}:refs/tags/${DUFS_VERSION}" || return 1
+    git -C "$DUFS_SRC" checkout --detach --force "refs/tags/${DUFS_VERSION}^{commit}" || return 1
+  fi
+  # Remove untracked source/configuration left by previous FFI/platform builds.
+  # Keep ignored Cargo target artifacts available for incremental compilation.
+  git -C "$DUFS_SRC" clean -fd || return 1
+}
+
+create_dufs_checkout() {
+  git init --quiet "$DUFS_SRC"
+  git -C "$DUFS_SRC" remote add origin "$DUFS_REPO"
+  refresh_dufs_checkout
+}
+
 # Reuse a cached checkout only if it's a complete clone of the pinned ref. A
 # partial tree from an interrupted run (or a corrupt one) must be re-cloned,
 # otherwise it gets silently reused and the build fails in confusing ways.
 if [ -d "$DUFS_SRC/.git" ] \
    && git -C "$DUFS_SRC" rev-parse --verify -q HEAD >/dev/null 2>&1 \
    && [ -f "$DUFS_SRC/Cargo.toml" ]; then
-  # 复用时也强制对齐 pin 的 tag：个人 fork 存在同名 re-tag 的可能，且树
-  # 会被下面的 FFI shim 拷贝弄脏——fetch（--force 覆盖本地 tag）+ checkout
-  # -f 一并处理。fetch 失败（网络）则整树重克隆。
   echo "Refreshing cached dufs checkout to $DUFS_VERSION: $DUFS_SRC"
-  if ! git -C "$DUFS_SRC" fetch --depth 1 --force origin \
-        "refs/tags/${DUFS_VERSION}:refs/tags/${DUFS_VERSION}" 2>/dev/null \
-     || ! git -C "$DUFS_SRC" checkout -f "$DUFS_VERSION" >/dev/null 2>&1; then
+  if ! refresh_dufs_checkout; then
     rm -rf "$DUFS_SRC"
-    git clone --depth 1 --branch "$DUFS_VERSION" "$DUFS_REPO" "$DUFS_SRC"
+    create_dufs_checkout
   fi
 else
   rm -rf "$DUFS_SRC"
-  git clone --depth 1 --branch "$DUFS_VERSION" "$DUFS_REPO" "$DUFS_SRC"
+  create_dufs_checkout
 fi
 
 # Apply FileInfra's FFI modifications (lib.rs + Cargo.toml [lib] section)
@@ -115,7 +143,7 @@ case "$PLATFORM" in
     elif [ -n "${ANDROID_HOME:-}" ]; then
       NDK=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d | sort -V | tail -1)
     else
-      echo "ERROR: ANDROID_NDK_HOME or ANDROID_NDK_HOME must be set"
+      echo "ERROR: ANDROID_NDK_HOME or ANDROID_HOME must be set"
       exit 1
     fi
 
@@ -165,7 +193,7 @@ EOF
     export AR="${TOOLCHAIN}/${HOST_TAG}/bin/llvm-ar"
     export RANLIB="${TOOLCHAIN}/${HOST_TAG}/bin/llvm-ranlib"
 
-    cargo build --release --target "$RUST_TARGET"
+    cargo build --locked --release --target "$RUST_TARGET"
 
     LIB_OUTPUT="${PROJECT_DIR}/android/app/src/main/jniLibs/${ABI_DIR}/libdufs.so"
     mkdir -p "$(dirname "$LIB_OUTPUT")"
@@ -182,9 +210,9 @@ EOF
     # 是 GCC 专属，旧 clang 不认。FileInfra 从不传 --tls-cert/--tls-key，
     # 纯 HTTP 用不到 tls，去掉后还能省下几百 KB。iOS 分支早已这么做。
     if [ "${DUFS_NO_DEFAULT_FEATURES:-0}" = "1" ]; then
-      cargo build --lib --release --no-default-features --target "$RUST_TARGET"
+      cargo build --locked --lib --release --no-default-features --target "$RUST_TARGET"
     else
-      cargo build --lib --release --target "$RUST_TARGET"
+      cargo build --locked --lib --release --target "$RUST_TARGET"
     fi
 
     cp "target/${RUST_TARGET}/release/libdufs.so" "${OUTPUT_DIR}/libdufs-linux-x86_64.so"
@@ -204,7 +232,7 @@ linker = "aarch64-linux-gnu-gcc"
 EOF
 
     export CC="aarch64-linux-gnu-gcc"
-    cargo build --lib --release --target "$RUST_TARGET"
+    cargo build --locked --lib --release --target "$RUST_TARGET"
 
     cp "target/${RUST_TARGET}/release/libdufs.so" "${OUTPUT_DIR}/libdufs-linux-aarch64.so"
     echo "Built: ${OUTPUT_DIR}/libdufs-linux-aarch64.so ($(du -h "${OUTPUT_DIR}/libdufs-linux-aarch64.so" | cut -f1))"
@@ -215,7 +243,7 @@ EOF
     if [ "$(uname -s | cut -c1-6)" = "MINGW" ] || [ "$(uname -s | cut -c1-5)" = "MSYS" ]; then
       # Native Windows build (CI runs on windows-latest)
       RUST_TARGET="x86_64-pc-windows-msvc"
-      cargo build --lib --release --target "$RUST_TARGET"
+      cargo build --locked --lib --release --target "$RUST_TARGET"
       cp "target/${RUST_TARGET}/release/dufs.dll" "${OUTPUT_DIR}/dufs-windows-x86_64.dll"
     else
       # Cross-compile from Linux
@@ -227,7 +255,7 @@ EOF
 linker = "x86_64-w64-mingw32-gcc"
 XEOF
       export CC="x86_64-w64-mingw32-gcc"
-      cargo build --lib --release --target "$RUST_TARGET"
+      cargo build --locked --lib --release --target "$RUST_TARGET"
       cp "target/${RUST_TARGET}/release/dufs.dll" "${OUTPUT_DIR}/dufs-windows-x86_64.dll"
     fi
     echo "Built: ${OUTPUT_DIR}/dufs-windows-x86_64.dll"
@@ -237,7 +265,7 @@ XEOF
     RUST_TARGET="aarch64-apple-darwin"
 
     ensure_rust_target
-    cargo build --lib --release --target "$RUST_TARGET"
+    cargo build --locked --lib --release --target "$RUST_TARGET"
 
     cp "target/${RUST_TARGET}/release/libdufs.dylib" "${OUTPUT_DIR}/libdufs-macos-arm64.dylib"
     echo "Built: ${OUTPUT_DIR}/libdufs-macos-arm64.dylib ($(du -h "${OUTPUT_DIR}/libdufs-macos-arm64.dylib" | cut -f1))"
@@ -247,7 +275,7 @@ XEOF
     RUST_TARGET="x86_64-apple-darwin"
 
     ensure_rust_target
-    cargo build --lib --release --target "$RUST_TARGET"
+    cargo build --locked --lib --release --target "$RUST_TARGET"
 
     cp "target/${RUST_TARGET}/release/libdufs.dylib" "${OUTPUT_DIR}/libdufs-macos-x86_64.dylib"
     echo "Built: ${OUTPUT_DIR}/libdufs-macos-x86_64.dylib ($(du -h "${OUTPUT_DIR}/libdufs-macos-x86_64.dylib" | cut -f1))"
@@ -266,7 +294,7 @@ XEOF
     # arm64 symbols. FileInfra never passes --tls-cert/--tls-key, so nothing is
     # lost. Revisit if the HTTPS roadmap item lands (fix aws-lc's
     # IPHONEOS_DEPLOYMENT_TARGET, or pin the ring provider in the fork).
-    cargo build --release --no-default-features --target "$RUST_TARGET"
+    cargo build --locked --release --no-default-features --target "$RUST_TARGET"
 
     mkdir -p "$FRAMEWORKS_DIR"
     cp "target/${RUST_TARGET}/release/dufs" "${FRAMEWORKS_DIR}/dufs"

@@ -16,28 +16,109 @@ import 'clipboard_service.dart';
 /// Whether to use FFI (in-process) instead of spawning dufs as child process.
 /// Desktop platforms (Linux/macOS/Windows) use FFI to avoid AppImage sandbox,
 /// antivirus interception, and orphan process issues.
-bool get _useFfi => Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+bool get _isAndroid =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+bool get _isIOS => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+bool get _useFfi =>
+    !_isAndroid &&
+    !_isIOS &&
+    (Platform.isLinux || Platform.isMacOS || Platform.isWindows);
 
 class DufsService extends ChangeNotifier {
   static const _ch = MethodChannel(kMethodChannel);
+  static DufsService? _nativeChannelOwner;
+  bool _disposed = false;
+  int? _nativeGeneration;
+  int _lastStoppedNativeGeneration = -1;
+  int _restoreGeneration = 0;
+  Future<void> _toolsTransition = Future<void>.value();
+  Future<void>? _stopTransition;
+
+  DufsService() {
+    if (_isAndroid) {
+      _nativeChannelOwner = this;
+      _ch.setMethodCallHandler(_handleNativeCall);
+    }
+  }
+
+  Future<void> _handleNativeCall(MethodCall call) async {
+    if (call.method != 'serviceStopped' || _disposed) return;
+    final generation = (call.arguments as Map?)?['generation'] as int?;
+    if (generation == null) return;
+    if (generation > _lastStoppedNativeGeneration) {
+      _lastStoppedNativeGeneration = generation;
+    }
+    if (generation != _nativeGeneration) return;
+    ++_startGeneration;
+    _clearRunningState();
+    await _stopTools();
+    _notifyState();
+  }
+
+  void _notifyState() {
+    if (!_disposed) notifyListeners();
+  }
+
+  bool _nativeRunWasStopped(int? generation) =>
+      generation != null && generation <= _lastStoppedNativeGeneration;
+
+  bool _operationIsCurrent(int generation, {int? restoreGeneration}) =>
+      !_disposed &&
+      generation == _startGeneration &&
+      (restoreGeneration == null || restoreGeneration == _restoreGeneration);
+
+  Future<void> _stopTools() {
+    final operation = _toolsTransition.then((_) => _clipboard.stop());
+    _toolsTransition = operation.catchError((Object _) {});
+    return operation;
+  }
+
+  Future<void> _startTools(int generation, int port, {int? restoreGeneration}) {
+    final operation = _toolsTransition.then((_) async {
+      if (!_operationIsCurrent(
+            generation,
+            restoreGeneration: restoreGeneration,
+          ) ||
+          !_isRunning) {
+        return;
+      }
+      if (!_clipboard.isRunning) await _clipboard.start(port);
+      if (!_operationIsCurrent(
+            generation,
+            restoreGeneration: restoreGeneration,
+          ) ||
+          !_isRunning) {
+        await _clipboard.stop();
+      }
+    });
+    _toolsTransition = operation.catchError((Object _) {});
+    return operation;
+  }
+
   /// --log-file 轮转上限：超限即在读取后截断（内容已入 UI），防长会话
   /// 无界增长（F3 的 Dart 侧缓解；dufs 以追加模式写，截断后继续从 0 写）。
   static const _kMaxLogBytes = 16 * 1024 * 1024;
 
   final DufsFfi _dufsFfi = DufsFfi();
   Process? _process;
+
   /// iOS 子进程退出码；startServer 的 300ms 等待后非空即视为启动失败。
   int? _processExitCode;
   bool _isRunning = false;
+
   /// 重入守卫：_isRunning 要到启动链尾段才置位，resume 恢复与用户点击
   /// 可并发触发两次启动（UI 的 _isServerTransitioning 只护住按钮）。
   bool _isStarting = false;
   final ClipboardService _clipboard = ClipboardService();
+
   /// 当前 UI 语言，用于服务层错误/提示文案。
   String _lang = 'zh';
   String? _serverUrl;
   String? _localIp;
   String? _error;
+
   /// 启动时由 _probeReadable 设置的 Android 目录可读性警告（非阻断），
   /// 在服务启动后由 UI 展示，告知用户 dufs 可能无法读取该目录下的文件。
   String? _androidReadableWarning;
@@ -52,7 +133,6 @@ class DufsService extends ChangeNotifier {
   /// 用户选定的优先展示地址（默认地址）；null = 列表第一个
   String? _preferredAddress;
   String? get preferredAddress => _preferredAddress;
-
 
   /// 实际绑定的端口（可能因冲突自动 +1，与 ServerConfig.port 解耦）
   int _activePort = 0;
@@ -78,9 +158,11 @@ class DufsService extends ChangeNotifier {
   String? get clipboardError => _clipboard.lastError;
   String? get localIp => _localIp;
   String? get error => _error;
+
   /// 服务启动时探测目录不可读的警告（Android 非阻断场景）。
   String? get androidReadableWarning => _androidReadableWarning;
   String? get portInfo => _portInfo;
+
   /// Port the running server is actually bound to. Differs from the
   /// user-configured `ServerConfig.port` when `_resolvePort` had to bump
   /// the port to find a free one. UI should prefer this for URLs while
@@ -88,6 +170,7 @@ class DufsService extends ChangeNotifier {
   int get activePort => _activePort;
   int get totalRequests => _totalRequests;
   String? get lastActivity => _lastActivity;
+
   /// Time since the last parsed request, or null if none yet. Lets the UI
   /// tell "transfer likely in progress" from "idle after a past request".
   Duration? get timeSinceLastActivity => _lastActivityAt == null
@@ -107,7 +190,7 @@ class DufsService extends ChangeNotifier {
   void _log(String msg) {
     debugPrint(msg);
     // ignore: body_might_complete_normally_catch_error
-    if (Platform.isAndroid) {
+    if (_isAndroid) {
       _ch.invokeMethod('log', {'msg': msg}).catchError((_) {});
     }
   }
@@ -137,16 +220,19 @@ class DufsService extends ChangeNotifier {
     if (ip == null || !_allAddresses.contains(ip)) return;
     _preferredAddress = ip;
     _serverUrl = 'http://${_formatHost(ip)}:$_activePort';
-    notifyListeners();
+    _notifyState();
     // 服务运行中则同步通知栏地址（Kotlin 侧 no-op if 未运行）。
-    if (Platform.isAndroid && _isRunning) {
+    if (_isAndroid && _isRunning) {
       final cbUrl = _clipboard.port != null
           ? 'http://${_formatHost(ip)}:${_clipboard.port}'
           : '';
-      _ch.invokeMethod('updateNotificationAddress', {
-        'address': _serverUrl!,
-        'clipboardAddress': cbUrl,
-      }).catchError((_) {});
+      _ch
+          .invokeMethod('updateNotificationAddress', {
+            'address': _serverUrl!,
+            'clipboardAddress': cbUrl,
+            'generation': _nativeGeneration,
+          })
+          .catchError((_) {});
     }
   }
 
@@ -197,21 +283,30 @@ class DufsService extends ChangeNotifier {
   /// Sets [_portInfo] with a user-facing message when an automatic decision
   /// was made (orphan killed, port bumped). UI is expected to surface and
   /// then [clearPortInfo].
-  Future<int> _resolvePort(int requestedPort) async {
+  Future<int> _resolvePort(int requestedPort, int generation) async {
     const maxBump = 9;
-    if (await _isPortAvailable(requestedPort)) return requestedPort;
+    final requestedAvailable = await _isPortAvailable(requestedPort);
+    if (!_operationIsCurrent(generation) || requestedAvailable) {
+      return requestedPort;
+    }
 
     _log('Port $requestedPort in use, attempting orphan cleanup...');
     await _killOrphanDufs(requestedPort);
+    if (!_operationIsCurrent(generation)) return requestedPort;
     await Future.delayed(const Duration(milliseconds: 400));
-    if (await _isPortAvailable(requestedPort)) {
+    if (!_operationIsCurrent(generation)) return requestedPort;
+    final cleanedPortAvailable = await _isPortAvailable(requestedPort);
+    if (!_operationIsCurrent(generation)) return requestedPort;
+    if (cleanedPortAvailable) {
       _portInfo = _t('srv.orphanKilled', {'port': '$requestedPort'});
       return requestedPort;
     }
 
     for (var bump = 1; bump <= maxBump; bump++) {
       final candidate = requestedPort + bump;
-      if (await _isPortAvailable(candidate)) {
+      final candidateAvailable = await _isPortAvailable(candidate);
+      if (!_operationIsCurrent(generation)) return requestedPort;
+      if (candidateAvailable) {
         _portInfo = _t('srv.portBumped', {
           'from': '$requestedPort',
           'to': '$candidate',
@@ -249,7 +344,7 @@ class DufsService extends ChangeNotifier {
   /// desktop platforms and returns above, so only the Android path ever ran.)
   Future<void> _killOrphanDufs(int port) async {
     if (_useFfi) return; // desktop: dufs runs in-process, no orphan to kill
-    if (!Platform.isAndroid) return; // iOS: can't kill the child this way
+    if (!_isAndroid) return; // iOS: can't kill the child this way
     try {
       await Process.run('pkill', [
         '-f',
@@ -261,55 +356,91 @@ class DufsService extends ChangeNotifier {
     }
   }
 
-  Future<void> _prepareLogFile() async {
+  Future<bool> _prepareLogFile(int generation, {int? restoreGeneration}) async {
     final tmpDir = await getTemporaryDirectory();
-    _logFilePath = '${tmpDir.path}/fileinfra_dufs.log';
+    if (!_operationIsCurrent(
+      generation,
+      restoreGeneration: restoreGeneration,
+    )) {
+      return false;
+    }
+    final logFilePath = '${tmpDir.path}/fileinfra_dufs.log';
     try {
-      await File(_logFilePath!).writeAsString('');
+      final logFile = await File(
+        logFilePath,
+      ).open(mode: FileMode.writeOnlyAppend);
+      try {
+        if (!_operationIsCurrent(
+          generation,
+          restoreGeneration: restoreGeneration,
+        )) {
+          return false;
+        }
+        logFile.truncateSync(0);
+      } finally {
+        await logFile.close();
+      }
     } catch (_) {}
+    if (!_operationIsCurrent(
+      generation,
+      restoreGeneration: restoreGeneration,
+    )) {
+      return false;
+    }
+    _logFilePath = logFilePath;
     _logFilePosition = 0;
     _logFileRemainder = '';
+    return true;
   }
 
   Future<void> startServer(ServerConfig config) async {
-    if (_isRunning || _isStarting) return;
+    if (_disposed || _isRunning || _isStarting || _stopTransition != null) {
+      return;
+    }
     _isStarting = true;
+    final generation = ++_startGeneration;
     try {
-      await _startServerLocked(config);
+      await _startServerLocked(config, generation);
     } finally {
       _isStarting = false;
     }
   }
 
-  Future<void> _startServerLocked(ServerConfig config) async {
+  Future<void> _startServerLocked(ServerConfig config, int generation) async {
     _lang = config.language;
     // 重置上轮残留的可读性警告：它只应在“服务真的启动成功”时展示，
     // 否则启动中任一后续失败（权限/端口/服务拉起）会让 UI 同时显示
     // 错误 + “已启动但目录不可读”的矛盾警告。
     _androidReadableWarning = null;
-    await _prepareLogFile();
+    if (!await _prepareLogFile(generation)) return;
     if (config.path.isEmpty) {
       _error = _l10n.t('srv.noDir');
-      notifyListeners();
+      _notifyState();
       return;
     }
     // 单文件模式检查文件是否存在，目录模式检查目录是否存在
     if (config.shareSingleFile) {
-      if (!await File(config.path).exists()) {
+      final fileExists = await File(config.path).exists();
+      if (!_operationIsCurrent(generation)) return;
+      if (!fileExists) {
         _error = _l10n.t('srv.fileGone');
-        notifyListeners();
+        _notifyState();
         return;
       }
       final parentDir = p.dirname(config.path);
-      if (!await Directory(parentDir).exists()) {
+      final parentExists = await Directory(parentDir).exists();
+      if (!_operationIsCurrent(generation)) return;
+      if (!parentExists) {
         _error = _l10n.t('srv.parentGone');
-        notifyListeners();
+        _notifyState();
         return;
       }
     } else {
-      if (!await Directory(config.path).exists()) {
+      final directoryExists = await Directory(config.path).exists();
+      if (!_operationIsCurrent(generation)) return;
+      if (!directoryExists) {
         _error = _l10n.t('srv.dirGone');
-        notifyListeners();
+        _notifyState();
         return;
       }
     }
@@ -325,18 +456,19 @@ class DufsService extends ChangeNotifier {
     // 断用户会陷入“给了权限也启动不了”。Android 上改为：保留错误文案但**不
     // 阻断**，让 dufs 尝试绑定，能读到什么是什么（传输记录里 403 会留痕）。
     final readableError = await _probeReadable(config);
+    if (!_operationIsCurrent(generation)) return;
     // Android 上的目录可读性警告先放本地变量，服务真正启动成功后
     // 才落字段展示（见下），避免启动中途失败时残留“已启动”矛盾警告。
     String? androidReadableWarning;
     if (readableError != null) {
-      if (Platform.isAndroid) {
+      if (_isAndroid) {
         // 非阻断：先缓存该警告，启动成功后由_serveUrls区域继续展示，
         // 用户可据此判断是否需要换目录。
         _log('readability warning (non-blocking on Android): $readableError');
         androidReadableWarning = readableError;
       } else {
         _error = readableError;
-        notifyListeners();
+        _notifyState();
         return;
       }
     }
@@ -344,7 +476,7 @@ class DufsService extends ChangeNotifier {
     final permError = config.validatePermissions(config.language);
     if (permError != null) {
       _error = permError;
-      notifyListeners();
+      _notifyState();
       return;
     }
     // Resolve port: kill orphan dufs, fall back to next free port if needed.
@@ -353,34 +485,38 @@ class DufsService extends ChangeNotifier {
     _portInfo = null;
     final int actualPort;
     try {
-      actualPort = await _resolvePort(config.port);
+      actualPort = await _resolvePort(config.port, generation);
     } catch (e) {
+      if (!_operationIsCurrent(generation)) return;
       _error = e.toString().replaceFirst('Exception: ', '');
-      notifyListeners();
+      _notifyState();
       return;
     }
+    if (!_operationIsCurrent(generation)) return;
     _activePort = actualPort;
     if (_portInfo != null) {
       _log(_portInfo!);
-      notifyListeners();
+      _notifyState();
     }
     try {
       _error = null;
-      notifyListeners();
-      if (Platform.isAndroid) {
+      _notifyState();
+      if (_isAndroid) {
         final granted =
             await _ch.invokeMethod<bool>('isStorageGranted') ?? false;
+        if (!_operationIsCurrent(generation)) return;
         _log('MANAGE_EXTERNAL_STORAGE granted: $granted');
         if (!granted) {
           _error = _l10n.t('srv.storagePermNeeded');
-          notifyListeners();
+          _notifyState();
           await _ch.invokeMethod('requestStorage');
           return;
         }
       }
-      if (Platform.isAndroid) {
+      if (_isAndroid) {
         // Android: start dufs via Native Service (process lives in Service, not Dart)
         final args = _buildArgs(config, actualPort);
+        if (_disposed || generation != _startGeneration) return;
         await _ch.invokeMethod('startForegroundService', {
           'port': actualPort,
           'path': config.path,
@@ -397,6 +533,13 @@ class DufsService extends ChangeNotifier {
         for (var i = 0; i < 30; i++) {
           await Future.delayed(const Duration(milliseconds: 200));
           info = await _ch.invokeMethod<Map>('getServiceInfo');
+          if (_disposed || generation != _startGeneration) return;
+          if (_nativeRunWasStopped(info?['generation'] as int?)) {
+            _clearRunningState();
+            await _stopTools();
+            _notifyState();
+            return;
+          }
           if (info?['isRunning'] == true) break;
           final svcError = (info?['error'] as String?) ?? '';
           if (svcError.isNotEmpty) {
@@ -407,33 +550,39 @@ class DufsService extends ChangeNotifier {
         }
         if (serviceFailed || info == null || info['isRunning'] != true) {
           final svcError = (info?['error'] as String?) ?? '';
-          _error = '${_l10n.t('srv.startFailed')}'
+          _error =
+              '${_l10n.t('srv.startFailed')}'
               '${svcError.isNotEmpty ? ': $svcError' : ''}';
           _isRunning = false;
           _activePort = 0;
-          notifyListeners();
+          _notifyState();
           return;
         }
-      } else if (Platform.isIOS) {
+        _nativeGeneration = info['generation'] as int?;
+      } else if (_isIOS) {
         // iOS: start dufs as child process (not signed for FFI)
-        await _startDufsProcess(config, actualPort);
+        await _startDufsProcess(config, actualPort, generation);
       } else {
         // Desktop (Linux/macOS/Windows): use FFI
-        await _startDufsFfi(config, actualPort);
+        await _startDufsFfi(config, actualPort, generation);
       }
 
+      if (_disposed || generation != _startGeneration) return;
       _isRunning = true;
-      final gen = ++_startGeneration;
+      final gen = generation;
       // 立即通知 UI 翻转（「启动服务」→「停止服务」），让用户感知服务已启动。
       // TCP + HTTP 长验证稍后在 _startServerLocked 收尾后由后台
       // [_verifyServerAsync] 完成，失败再回滚（见下方 try 块末尾）。
-      notifyListeners();
+      _notifyState();
       // 服务确认跑起来了才把可读性警告挂上 UI。
       if (androidReadableWarning != null) {
         _androidReadableWarning = androidReadableWarning;
       }
-      _localIp = await _getWifiIP();
+      final localIp = await _getWifiIP();
+      if (!_operationIsCurrent(gen) || !_isRunning) return;
       final allNet = await _getAllAddresses();
+      if (_disposed || gen != _startGeneration || !_isRunning) return;
+      _localIp = localIp;
       _allAddresses = allNet['addresses'] ?? [];
       _allInterfaceNames = allNet['names'] ?? [];
       // 确保默认 WiFi IP 在列表首位
@@ -465,26 +614,31 @@ class DufsService extends ChangeNotifier {
       // 剪贴板旁路服务：端口 = dufs 最终解析端口 + 2000（默认 5000→7000，
       // dufs 自动+1 时跟随），与 dufs 同生同死；自身被占或落在浏览器黑名单
       // 端口再+1 最多 9 步，全不可用则降级跳过。
-      await _clipboard.start(actualPort);
+      await _startTools(gen, actualPort);
+      if (_disposed || gen != _startGeneration || !_isRunning) return;
       // 通知栏更新：地址 + 剪贴板地址（startForegroundService 时 _serverUrl 尚未
       // 确定，传的是空串，导致之前通知栏不显示地址——此处推送纠正）。
-      if (Platform.isAndroid) {
+      if (_isAndroid) {
         final cbUrl = _clipboard.port != null
             ? 'http://${_formatHost(preferred)}:${_clipboard.port}'
             : '';
-        _ch.invokeMethod('updateNotificationAddress', {
-          'address': _serverUrl!,
-          'clipboardAddress': cbUrl,
-        }).catchError((_) {});
+        _ch
+            .invokeMethod('updateNotificationAddress', {
+              'address': _serverUrl!,
+              'clipboardAddress': cbUrl,
+              'generation': _nativeGeneration,
+            })
+            .catchError((_) {});
       }
-      notifyListeners();
+      _notifyState();
       // _startServerLocked 已收尾（地址/剪贴板/日志轮询就绪）后才启动后台
       // 验证，避免与回滚的 stopServer() 并发竞态。Android 由 Kotlin 侧
       // waitForServerReady 完成同等验证，无需重复。
-      if (!Platform.isAndroid) {
+      if (!_isAndroid) {
         unawaited(_verifyServerAsync(gen, actualPort));
       }
     } catch (e) {
+      if (_disposed || generation != _startGeneration) return;
       // FFI 已起来的情况下不能只清状态：stopServer 会因 !_isRunning 拒停，
       // 服务器会占着端口滞留到进程退出。
       if (_useFfi && _dufsFfi.isLoaded && _dufsFfi.isRunning()) {
@@ -495,7 +649,8 @@ class DufsService extends ChangeNotifier {
       _error = 'Start failed: $e';
       _isRunning = false;
       _activePort = 0;
-      notifyListeners();
+      await _stopTools();
+      _notifyState();
       _log('failed: $e');
     }
   }
@@ -539,6 +694,8 @@ class DufsService extends ChangeNotifier {
 
   /// Partial line buffered between incremental reads
   String _logFileRemainder = '';
+  int _logPollGeneration = 0;
+  Object? _activeLogRead;
 
   /// Redact the value following any `--auth` flag so credentials (user:pass)
   /// do not leak into logcat / debugPrint. Kotlin-side already redacted in
@@ -561,9 +718,18 @@ class DufsService extends ChangeNotifier {
   /// 用户已停止又重启了服务，误杀/误报新实例。
   int _startGeneration = 0;
 
-  Future<void> _startDufsFfi(ServerConfig config, int port) async {
+  Future<void> _startDufsFfi(
+    ServerConfig config,
+    int port,
+    int generation,
+  ) async {
+    if (!_operationIsCurrent(generation)) return;
     if (!_dufsFfi.isLoaded) {
       final libPath = await resolveDufsLibPath();
+      if (!_operationIsCurrent(generation)) {
+        await discardResolvedDufsLibPath(libPath);
+        return;
+      }
       _log('Loading dufs FFI library: $libPath');
       _dufsFfi.load(libPath);
     }
@@ -622,21 +788,25 @@ class DufsService extends ChangeNotifier {
     if (gen != _startGeneration || !_isRunning) return;
     _log('Server verify failed (tcp=$tcpOk http=$httpOk), rolling back');
     await stopServer();
-    _error = _t(
-      tcpOk ? 'srv.notResponding' : 'srv.notListening',
-      {'port': '$port'},
-    );
-    notifyListeners();
+    _error = _t(tcpOk ? 'srv.notResponding' : 'srv.notListening', {
+      'port': '$port',
+    });
+    _notifyState();
   }
 
   /// 轮询本机端口直到可连接。返回 false 即超时（默认 3s）。
-  Future<bool> _waitPortReady(int port,
-      {Duration timeout = const Duration(seconds: 3)}) async {
+  Future<bool> _waitPortReady(
+    int port, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       try {
-        final s = await Socket.connect(InternetAddress.loopbackIPv4, port,
-            timeout: const Duration(milliseconds: 300));
+        final s = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          port,
+          timeout: const Duration(milliseconds: 300),
+        );
         s.destroy();
         return true;
       } catch (_) {}
@@ -646,18 +816,34 @@ class DufsService extends ChangeNotifier {
   }
 
   // ==================== Start dufs process (iOS) ====================
-  Future<void> _startDufsProcess(ServerConfig config, int port) async {
+  Future<void> _startDufsProcess(
+    ServerConfig config,
+    int port,
+    int generation,
+  ) async {
+    if (!_operationIsCurrent(generation)) return;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final binPath = p.join(exeDir, 'dufs');
     if (!await File(binPath).exists()) {
+      if (!_operationIsCurrent(generation)) return;
       throw Exception(_t('srv.dufsMissing', {'path': binPath}));
     }
+    if (!_operationIsCurrent(generation)) return;
     final args = _buildArgs(config, port);
     final workDir = config.shareSingleFile
         ? p.dirname(config.path)
         : config.path;
     _log('dufs: $binPath ${_redactedArgs(args).join(' ')}');
     final proc = await Process.start(binPath, args, workingDirectory: workDir);
+    if (!_operationIsCurrent(generation)) {
+      proc.kill();
+      try {
+        await proc.exitCode.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        proc.kill(ProcessSignal.sigkill);
+      }
+      return;
+    }
     _process = proc;
     _processExitCode = null;
     // 监听子进程退出：秒死（参数错/端口被抢）要在 UI 标记失败，运行中死掉
@@ -674,6 +860,7 @@ class DufsService extends ChangeNotifier {
       _trackActivity(line);
     });
     await Future.delayed(const Duration(milliseconds: 300));
+    if (!_operationIsCurrent(generation)) return;
     if (_processExitCode != null) {
       throw Exception(
         _t('srv.exitedDuringStart', {'code': '$_processExitCode'}),
@@ -689,19 +876,11 @@ class DufsService extends ChangeNotifier {
     _processExitCode = code;
     if (!_isRunning) return;
     _error = _t('srv.exitedUnexpectedly', {'code': '$code'});
-    _isRunning = false;
-    _activePort = 0;
-    _serverUrl = null;
-    _totalRequests = 0;
-    _lastActivity = null;
-    _lastActivityAt = null;
-    _allAddresses = [];
-    _allInterfaceNames = [];
-    _transferLogs.clear();
-    _logFileTimer?.cancel();
-    _logFileTimer = null;
+    ++_startGeneration;
+    _clearRunningState();
+    unawaited(_stopTools());
     _log('dufs process died unexpectedly (code $code)');
-    notifyListeners();
+    _notifyState();
   }
 
   /// 解析 dufs 输出行，更新请求计数和日志列表。
@@ -730,7 +909,7 @@ class DufsService extends ChangeNotifier {
   /// Ingest one line and notify immediately. Used by the iOS stdout/stderr
   /// stream path, where lines arrive one at a time anyway.
   void _trackActivity(String line) {
-    if (_ingestLine(line)) notifyListeners();
+    if (_ingestLine(line)) _notifyState();
   }
 
   Future<String?> _probeReadable(ServerConfig c) =>
@@ -757,13 +936,14 @@ class DufsService extends ChangeNotifier {
       }
       return null;
     } on FileSystemException catch (e) {
-      final key =
-          c.shareSingleFile ? 'srv.fileNotReadable' : 'srv.dirNotReadable';
+      final key = c.shareSingleFile
+          ? 'srv.fileNotReadable'
+          : 'srv.dirNotReadable';
       final reason = e.osError?.message ?? e.message;
       say('readability probe failed for ${c.path}: $reason');
       // 分区存储那段建议只对 Android 有意义：桌面走到这里通常是权限位、
       // SELinux 或断开的网络盘，照抄 Android 文案会把人带偏。
-      final hint = !c.shareSingleFile && Platform.isAndroid
+      final hint = !c.shareSingleFile && _isAndroid
           ? ' ${l10n.t('srv.dirNotReadableAndroid')}'
           : '';
       return '${l10n.t(key)}（$reason）$hint';
@@ -811,11 +991,13 @@ class DufsService extends ChangeNotifier {
 
   void clearLogs() {
     _transferLogs.clear();
-    notifyListeners();
+    _notifyState();
   }
 
   void _startLogFilePolling() {
     _logFileTimer?.cancel();
+    ++_logPollGeneration;
+    _activeLogRead = null;
     _logFileTimer = Timer.periodic(
       const Duration(seconds: 2),
       (_) => _readLogFile(),
@@ -823,27 +1005,51 @@ class DufsService extends ChangeNotifier {
   }
 
   Future<void> _readLogFile() async {
-    if (_logFilePath == null) return;
+    final logPath = _logFilePath;
+    if (logPath == null || !_isRunning || _disposed || _activeLogRead != null) {
+      return;
+    }
+    final generation = _startGeneration;
+    final pollGeneration = _logPollGeneration;
+    final readToken = Object();
+    _activeLogRead = readToken;
+    bool current() =>
+        _operationIsCurrent(generation) &&
+        _isRunning &&
+        pollGeneration == _logPollGeneration &&
+        logPath == _logFilePath;
     try {
-      final file = File(_logFilePath!);
-      if (!await file.exists()) return;
+      final file = File(logPath);
+      final exists = await file.exists();
+      if (!current() || !exists) return;
       final raf = await file.open();
+      var truncateAfterRead = false;
       try {
+        if (!current()) return;
         final length = await raf.length();
-        if (length < _logFilePosition) {
-          _logFilePosition = 0;
-          _logFileRemainder = '';
+        if (!current()) return;
+        var position = _logFilePosition;
+        var remainder = _logFileRemainder;
+        if (length < position) {
+          position = 0;
+          remainder = '';
         }
-        if (length == _logFilePosition) return;
+        if (length == position) {
+          _logFilePosition = position;
+          _logFileRemainder = remainder;
+          return;
+        }
 
-        await raf.setPosition(_logFilePosition);
-        final bytes = await raf.read(length - _logFilePosition);
-        _logFilePosition = length;
+        await raf.setPosition(position);
+        if (!current()) return;
+        final bytes = await raf.read(length - position);
+        if (!current()) return;
 
         final chunk = utf8.decode(bytes, allowMalformed: true);
-        final merged = _logFileRemainder + chunk;
+        final merged = remainder + chunk;
         final endsWithNewline = merged.endsWith('\n');
         final lines = merged.split('\n');
+        _logFilePosition = length;
         _logFileRemainder = endsWithNewline ? '' : lines.removeLast();
 
         var changed = false;
@@ -851,34 +1057,53 @@ class DufsService extends ChangeNotifier {
           final trimmed = line.trim();
           if (trimmed.isNotEmpty && _ingestLine(trimmed)) changed = true;
         }
-        if (changed) notifyListeners();
+        if (changed) _notifyState();
         // F3 缓解：内容已消化，超过上限即截断（dufs 追加写会从 0 续写），
         // 防单个长分享会话把临时目录写爆。
-        if (length > _kMaxLogBytes) {
-          _overCap = true;
-        }
+        truncateAfterRead = length > _kMaxLogBytes;
       } finally {
         await raf.close();
       }
-      if (_overCap) {
-        _overCap = false;
-        _logFilePosition = 0;
-        _logFileRemainder = '';
-        final w = await file.open(mode: FileMode.writeOnly);
+      if (!current()) return;
+      if (truncateAfterRead) {
+        final w = await file.open(mode: FileMode.writeOnlyAppend);
         try {
-          await w.truncate(0);
+          if (!current()) return;
+          // Keep the generation check and file mutation in one event-loop
+          // turn; a delayed truncation must not clear a replacement run.
+          w.truncateSync(0);
+          _logFilePosition = 0;
+          _logFileRemainder = '';
         } finally {
           await w.close();
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Log polling is best effort; child/service lifecycle owns errors.
+    } finally {
+      if (identical(_activeLogRead, readToken)) _activeLogRead = null;
+    }
   }
 
-  /// _readLogFile 内部跨 try/finally 的截断信号。
-  bool _overCap = false;
+  Future<void> stopServer() {
+    if (_disposed) return Future<void>.value();
+    final pending = _stopTransition;
+    if (pending != null) return pending;
+    final operation = _stopServerLocked();
+    _stopTransition = operation;
+    return operation.whenComplete(() => _stopTransition = null);
+  }
 
-  Future<void> stopServer() async {
-    if (!_isRunning) return;
+  Future<void> _stopServerLocked() async {
+    if (_disposed) return;
+    ++_startGeneration;
+    final nativeGeneration = _nativeGeneration;
+    final wasRunning = _isRunning;
+    _clearRunningState();
+    // Close the tools endpoint before waiting for the native/process shutdown.
+    // A notification stop callback can arrive while that shutdown is pending.
+    await _stopTools();
+    if (!wasRunning && !_isStarting) return;
     if (_useFfi && _dufsFfi.isLoaded) {
       // FFI mode: stop the in-process server
       _dufsFfi.stop();
@@ -904,10 +1129,19 @@ class DufsService extends ChangeNotifier {
       _process = null;
       _processExitCode = null;
     }
-    if (Platform.isAndroid) {
-      _ch.invokeMethod('stopForegroundService').catchError((_) {});
+    if (_isAndroid) {
+      await _ch
+          .invokeMethod('stopForegroundService', {
+            'generation': nativeGeneration,
+          })
+          .catchError((_) {});
     }
+    _notifyState();
+  }
+
+  void _clearRunningState() {
     _isRunning = false;
+    _nativeGeneration = null;
     _serverUrl = null;
     _activePort = 0;
     _totalRequests = 0;
@@ -918,29 +1152,92 @@ class DufsService extends ChangeNotifier {
     _transferLogs.clear();
     _logFileTimer?.cancel();
     _logFileTimer = null;
+    ++_logPollGeneration;
+    _activeLogRead = null;
     _logFilePath = null;
     _logFilePosition = 0;
     _logFileRemainder = '';
     _androidReadableWarning = null;
-    await _clipboard.stop();
-    notifyListeners();
   }
 
   /// 恢复到 Native Service 管理的 dufs 进程状态（Activity 重建后查询 Service）
   Future<void> restoreFromService() async {
-    if (!Platform.isAndroid) return;
+    if (!_isAndroid || _disposed || _isStarting || _stopTransition != null) {
+      return;
+    }
+    final generation = _startGeneration;
+    final restoreGeneration = ++_restoreGeneration;
     try {
       final info = await _ch.invokeMethod<Map>('getServiceInfo');
+      if (!_operationIsCurrent(
+        generation,
+        restoreGeneration: restoreGeneration,
+      )) {
+        return;
+      }
+      final infoGeneration = info?['generation'] as int?;
+      if (infoGeneration != null &&
+          _nativeGeneration != null &&
+          infoGeneration < _nativeGeneration!) {
+        return;
+      }
       if (info != null && info['isRunning'] == true) {
         final port = info['port'] as int? ?? 0;
+        if (port < 1 || port > 65535) return;
+        final nativeGeneration = info['generation'] as int?;
+        if (_nativeRunWasStopped(nativeGeneration)) {
+          _clearRunningState();
+          await _stopTools();
+          _notifyState();
+          return;
+        }
+        final sameRun =
+            _isRunning &&
+            _nativeGeneration == nativeGeneration &&
+            _activePort == port;
+        if (!sameRun) {
+          ++_logPollGeneration;
+          _activeLogRead = null;
+          _logFileTimer?.cancel();
+          _logFileTimer = null;
+          await _stopTools();
+        }
+        if (!_operationIsCurrent(
+          generation,
+          restoreGeneration: restoreGeneration,
+        )) {
+          return;
+        }
+        _nativeGeneration = nativeGeneration;
         _activePort = port;
-        await _prepareLogFile();
-        _totalRequests = 0;
-        _lastActivity = null;
-        _lastActivityAt = null;
-        _transferLogs.clear();
-        _localIp = await _getWifiIP();
+        if (!sameRun &&
+            !await _prepareLogFile(
+              generation,
+              restoreGeneration: restoreGeneration,
+            )) {
+          return;
+        }
+        if (!sameRun) {
+          _totalRequests = 0;
+          _lastActivity = null;
+          _lastActivityAt = null;
+          _transferLogs.clear();
+        }
+        final localIp = await _getWifiIP();
+        if (!_operationIsCurrent(
+          generation,
+          restoreGeneration: restoreGeneration,
+        )) {
+          return;
+        }
         final allNet = await _getAllAddresses();
+        if (!_operationIsCurrent(
+          generation,
+          restoreGeneration: restoreGeneration,
+        )) {
+          return;
+        }
+        _localIp = localIp;
         _allAddresses = allNet['addresses'] ?? [];
         _allInterfaceNames = allNet['names'] ?? [];
         if (_localIp != null && _allAddresses.contains(_localIp)) {
@@ -957,11 +1254,47 @@ class DufsService extends ChangeNotifier {
           _allAddresses.add('127.0.0.1');
           _allInterfaceNames.add('Local');
         }
-        _serverUrl = 'http://${_allAddresses.first}:$port';
+        final savedAddress = info['address'] as String?;
+        final savedHost = savedAddress == null
+            ? null
+            : Uri.tryParse(savedAddress)?.host;
+        final preferred = _allAddresses.contains(savedHost)
+            ? savedHost!
+            : _allAddresses.first;
+        _preferredAddress = preferred;
+        _serverUrl = 'http://${_formatHost(preferred)}:$port';
         _isRunning = true;
         _startLogFilePolling();
+        await _startTools(
+          generation,
+          port,
+          restoreGeneration: restoreGeneration,
+        );
+        if (!_operationIsCurrent(
+              generation,
+              restoreGeneration: restoreGeneration,
+            ) ||
+            !_isRunning) {
+          return;
+        }
+        await _ch.invokeMethod('updateNotificationAddress', {
+          'address': _serverUrl!,
+          'clipboardAddress': clipboardUrl ?? '',
+          'generation': _nativeGeneration,
+        });
+        if (!_operationIsCurrent(
+          generation,
+          restoreGeneration: restoreGeneration,
+        )) {
+          return;
+        }
         _log('restored from native service: $_serverUrl');
-        notifyListeners();
+        _notifyState();
+      } else {
+        ++_startGeneration;
+        _clearRunningState();
+        await _stopTools();
+        _notifyState();
       }
     } catch (e) {
       _log('Failed to restore from service: $e');
@@ -970,6 +1303,12 @@ class DufsService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    ++_startGeneration;
+    if (_nativeChannelOwner == this) {
+      _nativeChannelOwner = null;
+      _ch.setMethodCallHandler(null);
+    }
     // Cancel the log-file poll timer before anything else: otherwise it can
     // fire after dispose and call notifyListeners() on a disposed
     // ChangeNotifier ("A ChangeNotifier was used after being disposed").
@@ -985,7 +1324,8 @@ class DufsService extends ChangeNotifier {
       _process?.kill();
     } catch (_) {}
     _process = null;
-    _isRunning = false;
+    _clearRunningState();
+    unawaited(_stopTools());
     super.dispose();
   }
 }

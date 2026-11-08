@@ -3,14 +3,52 @@
 > 所有版本均可在 [GitHub Releases](https://github.com/zocs/fileinfra/releases) 下载。
 > All versions available at [GitHub Releases](https://github.com/zocs/fileinfra/releases).
 
+## [Unreleased]
+
+## [v0.5.13](https://github.com/zocs/fileinfra/releases/tag/v0.5.13) (2026-11-09)
+
+**中文：**
+- ⬆️ 合并 dufs 0.47 与上游后续修复（至 `ec4ea01`），保留旧 WebView/无 JS 页面兼容、归档修复与 FFI 接口；修复 Digest MOVE/COPY 的 nonce 重复校验、HTTP/2 与 HTTP/1 请求目标校验，以及目录 MOVE 的目标子权限检查；无 JS 文件名改用属性转义。
+- 🔒 dufs 权限同时约束符号链接路由和真实目标，递归 ZIP/搜索逐项过滤；Digest 容量满时保留有效防重放记录并拒绝不支持的 auth-int；无 JS 表单校验浏览器 Origin。文件范围长度使用 u64，修复 32 位平台超过 4 GiB 的下载头/流长度；下载文件名正确转义引号与反斜杠。
+- 🐛 dufs 编辑器正确设置原生只读属性，保存返回 403/500 时保留草稿、光标和焦点；FFI 启动失败清理状态、拒绝空监听配置和未实现的 TLS 参数，显式地址绑定与 CLI 一致。固定来源 `8e8cce6` 与维护 shim 同步。
+- 🐛 工具页内联脚本恢复 ES5 语法，发送端收到原样文本确认，空白与末尾换行不再丢失；现代复制 API 失败后尝试旧 API，仍失败时提供可见、完整选中的多行文本供手动复制；重复快照不破坏选择。
+- 🔒 剪贴板 HTTP 按 UTF-8 字节流限制 1 MiB，拒绝非法编码及超限 WebSocket 文本；浏览器 API/WS 校验 Origin，停止时隔离旧连接与未完成请求。工具页仍不提供身份认证。
+- 🐛 Android 启停、Activity 恢复和通知更新按操作代次隔离；取消等待中的启动后清理工具页、地址及临时 FFI 副本，旧 worker 不再覆盖新进程或错误。通知「发送」聚焦应用后读取一次剪贴板，并验证通知动作的随机令牌。旧日志轮询/准备/截断不再回写新服务；同次服务恢复保留历史和计数。
+- 🐛 配置字段类型损坏时逐项使用默认值，保留安全存储认证的优先级与迁移；设置向导完成后同步语言、主题和配色。日志打开路径使用真实文件系统边界检查，拒绝越界或失效符号链接及编码路径遍历。
+- ♿ 合入经复核的小屏布局、触控目标、可读对比度、焦点与语义修复；新增实际语言切换与浏览器交互回归。
+- 📦 Windows 便携包与安装包附带三个 VC++ 运行库；NSIS 必须显式传入版本。Linux deb 依赖从所有发布 ELF 导出，文件归 root，修复图标、窗口标识与重复打包；Linux/macOS 每次打包都编译固定源码，避免旧库复用。AppImage FFI 临时副本使用独立 0700 目录并按所有权清理。
+- 🛠 CI 固定 Rust 1.99.1，运行 Flutter/浏览器、Android 原生、脚本与打包回归，校验签名证书和真实 FFI 启停；校验文件使用平铺下载文件名并包含带原生程序的实验性 iOS ZIP。F-Droid 配方增加明确无签名路径，预检固定源码版本/支持/可达性，上架仍推迟。
+- ✨ 新增 macOS Intel（x86_64）发布包 `FileInfra-*-macos-x64.zip`，与 Apple 芯片的 `-macos-arm64.zip` 并列。Flutter 的 macOS release 本就是 arm64 + x86_64 通用二进制，此前只有 libdufs.dylib 是 arm64 单架构；现在在同一 Apple 芯片 runner 上交叉编译 x86_64 版 dufs，打包时校验包内每个 Mach-O 都含目标架构。
+- 🐛 修复 `scripts/build_macos.sh x86_64` 必然失败的问题（查找 `libdufs-macos-x64.dylib`，而 `build_dufs.sh` 产出的是 `libdufs-macos-x86_64.dylib`）；未知架构参数直接报错，不再静默按 x86_64 构建；重复打包不再把 `.app` 套进旧 bundle。
+- 🐛 macOS 版不再启用 App Sandbox：沙盒下 release 包缺少 `network.server` 授权，内嵌 dufs 无法接受局域网连接，重启后也无权访问之前选择的共享目录。⚠️ 沙盒内保存过的设置不会迁移（需重新走一次向导）；仍需在真机上验证。
+- 📦 macOS 在放入 dylib 后重新进行 ad-hoc 签名并校验 bundle、库封装与 ZIP 解压后的签名，保留 framework 符号链接；最低版本设为 13.0，与内置 `objective_c.framework` 一致。未做 Developer ID 签名、公证或实机测试。
+- 📖 README 的 macOS 去隔离命令改为 `xattr -cr FileInfra.app`（与 Release 说明一致，`-d` 只处理 bundle 顶层）。
+
+**English:**
+- ⬆️ Merged dufs 0.47 and subsequent upstream fixes through `ec4ea01`, retaining old-WebView/no-JS compatibility, archive fixes and FFI. Fixed repeated Digest nonce checks on MOVE/COPY, HTTP/2 and HTTP/1 request-target validation, directory MOVE destination child permissions, and no-JS filename attribute escaping.
+- 🔒 dufs permissions constrain both symlink routes and physical targets, including each recursive ZIP/search entry. Digest capacity preserves fresh replay records and rejects unsupported auth-int; no-JS forms check browser Origins. Range lengths use u64 for downloads above 4 GiB on 32-bit targets; download filenames escape quotes and backslashes.
+- 🐛 The dufs editor sets the native read-only property and retains draft, selection and focus after 403/500 saves. FFI startup failure clears state, empty listener configurations and unsupported TLS arguments are rejected, and explicit binding follows the CLI. The maintained shim matches pinned source `8e8cce6`.
+- 🐛 Restored ES5 syntax in the tools page, exact sender acknowledgements, whitespace and trailing newlines. Failed modern clipboard writes try the legacy API, then show a visible, fully selected multiline field for manual copying. Duplicate snapshots preserve selection.
+- 🔒 Enforced the clipboard's 1 MiB UTF-8 streaming limit, rejected invalid encoding and oversized WebSocket text, checked browser API/WS Origins, and isolated unfinished requests during stop. The tools page still has no authentication.
+- 🐛 Isolated Android start/stop, Activity restoration and notifications by operation generation. Canceled startup clears tools, addresses and owned FFI staging; superseded native workers cannot replace newer process handles/errors. Notification Send waits for app focus, reads once and validates a private random action token. Superseded log polling/preparation/truncation cannot mutate a new run; restoring the same run preserves history and counts.
+- 🐛 Wrongly typed configuration fields use individual defaults while preserving secure credential priority/migration. Setup completion applies language/theme/color to the root app. Log paths use real filesystem containment and reject outside/dangling symlinks and encoded traversal.
+- ♿ Integrated reviewed small-screen layout, touch target, contrast, focus and semantic fixes, with actual locale-switch and browser interaction regressions.
+- 📦 Windows portable/installer bundles include three VC++ runtime DLLs; NSIS requires an explicit version. Linux deb dependencies come from all shipped ELF imports, ownership is root, and icons/window matching/repeated packaging are fixed. Linux/macOS packaging always builds the pinned core. AppImage FFI staging uses independent 0700 directories and ownership-scoped cleanup.
+- 🛠 CI pins Rust 1.99.1 and runs Flutter/browser, native Android, script and packaging regressions, certificate continuity and actual FFI restart checks. Checksums use flat download names and include experimental iOS ZIPs with the native executable. F-Droid preparation has an explicit unsigned path and checks pinned source version/support/reachability; submission remains postponed.
+- ✨ New macOS Intel (x86_64) release asset `FileInfra-*-macos-x64.zip`, alongside the Apple Silicon `-macos-arm64.zip`. Flutter's macOS release build was already a universal arm64 + x86_64 binary and only libdufs.dylib was arm64-only; dufs is now also cross-compiled for x86_64 on the same Apple Silicon runner, and packaging verifies that every Mach-O in the bundle contains the target architecture.
+- 🐛 Fixed `scripts/build_macos.sh x86_64` always failing (it looked for `libdufs-macos-x64.dylib` while `build_dufs.sh` writes `libdufs-macos-x86_64.dylib`); unknown arch arguments now error out instead of silently building x86_64, and re-running no longer nests the `.app` into the previous bundle.
+- 🐛 The macOS app no longer runs in the App Sandbox: the sandboxed release build lacked the `network.server` entitlement, so the embedded dufs could not accept LAN connections, nor reopen a previously chosen share directory after a relaunch. ⚠️ Settings saved inside the sandbox container are not migrated (the setup wizard runs again); still needs verification on a real Mac.
+- 📦 macOS is ad-hoc signed after staging the dylib, checks the bundle/library seal and signatures after ZIP extraction, and retains framework symlinks. The minimum is now macOS 13.0, matching the embedded `objective_c.framework`. Developer ID signing, notarization and device testing remain unavailable.
+- 📖 README's macOS quarantine fix is now `xattr -cr FileInfra.app` (matching the release notes; `-d` only clears the bundle's top level).
+
 ## [v0.5.12](https://github.com/zocs/fileinfra/releases/tag/v0.5.12) (2026-10)
 
 **中文：**
-- 🐛 修复工具页「复制到本机」复制到按钮文字而非共享内容的问题，并为不支持网页剪贴板 API 的 HTTP 页面增加回退。
+- 🐛 修复工具页「复制到本机」把同步时间戳附加到共享内容的问题，并为不支持网页剪贴板 API 的 HTTP 页面增加回退。
 - 📖 更新中英文 README，补充工具页、共享剪贴板、Android 快捷控制及相关安全说明。
 
 **English:**
-- 🐛 Fixed the Tools page's "Copy to device" button copying its label instead of the shared text, with a fallback for HTTP pages where the browser Clipboard API is unavailable.
+- 🐛 Fixed the Tools page's "Copy to device" button appending the synchronization timestamp to shared text, with a fallback for HTTP pages where the browser Clipboard API is unavailable.
 - 📖 Updated the English and Chinese READMEs with the tools page, shared clipboard, Android quick controls, and security notes.
 
 ## [v0.5.11](https://github.com/zocs/fileinfra/releases/tag/v0.5.11) (2026-09)

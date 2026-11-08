@@ -1,6 +1,6 @@
 FileInfra is a Dufs-based, lightweight cross-platform file distribution GUI optimized for air-gapped LANs and restricted industrial environments. Install it on ONE device, tap start, and anyone on the same network can upload and download files instantly via browser — no app needed on the other side.
 
-Just pick a folder, tap start, and share.
+Pick a folder or a single file, tap start, and share.
 
 Features:
 • One-tap file sharing via HTTP
@@ -12,5 +12,7 @@ Features:
 • Material 3 design with 6 color themes
 • Desktop drag & drop support
 • System tray integration
+• Shared LAN clipboard and offline QR tools page
+• Android notification and Quick Settings start/stop controls
 
-Your files stay on your local network — nothing leaves your device.
+Files and shared clipboard text go directly to the peers you connect to. No analytics or cloud relay is used. HTTP content is unencrypted, and the separate tools page is not protected by the file-server password. Notification Send opens FileInfra before reading the clipboard once; after a tile-only start, open the app to initialize tools.

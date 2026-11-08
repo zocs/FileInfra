@@ -21,6 +21,9 @@ permissions:
 
 env:
   FLUTTER_VERSION: '3.47.0'
+  RUST_VERSION: '1.99.1'
+  # Preserve the signing certificate used by existing FileInfra installations.
+  ANDROID_RELEASE_CERT_SHA256: 'e4db9054ff7070e4bee3387e928e1388facfec0526da10e4510282e9d26aed6a'
   # Bump after verifying ABI compat (esp. page-alignment on devices < API 35).
   # 28→29 (2026-08-18): runner ships NDK 29; libdufs alignment is still
   # force-pinned to 4KB by build_dufs.sh and verified by the hard guard below,
@@ -34,19 +37,45 @@ env:
 
 jobs:
   lint:
-    name: Analyze
+    name: Analyze & regression tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc cmake binutils rpm
+          python3 -m pip install PyYAML
+          npm ci --prefix test/browser
+          CHROMIUM=$(command -v chromium || command -v google-chrome || command -v google-chrome-stable)
+          test -n "$CHROMIUM"
+          echo "FILEINFRA_CHROMIUM=$CHROMIUM" >> "$GITHUB_ENV"
       - run: flutter pub get
       - run: flutter analyze
+      - name: Flutter and real browser regressions
+        run: flutter test --no-pub --reporter expanded
+      - name: Build and packaging regressions
+        run: |
+          python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
+          python3 -m unittest discover -s test -p '*_test.py' -v
+          python3 scripts/fdroid_prep_check.py
 
   build-android:
     name: Android
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_AVAILABLE: ${{ secrets.KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v7
       - name: Extract version
@@ -81,7 +110,12 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - run: flutter pub get
+      - name: Android notification and activity regressions
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --console=plain
       - name: Resolve and check NDK version
         run: |
           NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d -name '[0-9]*' | sort -V | tail -1)
@@ -125,20 +159,31 @@ jobs:
         # Chromium>=80 语法（?. / Object.fromEntries / catch{} / 对象展开）
         # 回到 Android 核心。
         run: |
-          SRC=$(ls -d /tmp/dufs-src-* 2>/dev/null | head -1)
-          if [ -z "$SRC" ]; then
-            echo "::error::dufs checkout not found (/tmp/dufs-src-*)"
+          DUFS_REF=$(sed -n 's/^DUFS_VERSION="\([^"]*\)"/\1/p' scripts/build_dufs.sh)
+          SRC="${TMPDIR:-/tmp}/dufs-src-${DUFS_REF}"
+          if [ ! -f "$SRC/assets/index.js" ]; then
+            echo "::error::pinned dufs checkout not found: $SRC"
             exit 1
           fi
           bash scripts/check_dufs_web.sh "$SRC/assets/index.js"
+      - name: Verify unsigned F-Droid build path
+        run: |
+          env -u KEYSTORE_FILE -u KEYSTORE_PASSWORD -u KEY_ALIAS -u KEY_PASSWORD \
+            FILEINFRA_UNSIGNED_RELEASE=1 flutter build apk --release
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          if "$APKSIGNER" verify build/app/outputs/flutter-apk/app-release.apk; then
+            echo "::error::F-Droid opt-in unexpectedly produced a signed APK"
+            exit 1
+          fi
       - name: Decode Keystore
-        if: env.KEYSTORE_BASE64 != ''
+        if: env.ANDROID_KEYSTORE_AVAILABLE == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > /tmp/fileinfra-release.jks
           echo "KEYSTORE_FILE=/tmp/fileinfra-release.jks" >> $GITHUB_ENV
-          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
+          if [ -n "$KEY_ALIAS" ]; then echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"; fi
       - name: Require keystore for tag-triggered release
         if: startsWith(github.ref, 'refs/tags/v') && env.KEYSTORE_FILE == ''
         run: |
@@ -147,11 +192,13 @@ jobs:
           exit 1
       - name: Build universal APK
         env:
+          FILEINFRA_UNSIGNED_RELEASE: ${{ env.ANDROID_KEYSTORE_AVAILABLE == 'true' && '0' || '1' }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: flutter build apk --release
       - name: Build per-ABI APKs
         env:
+          FILEINFRA_UNSIGNED_RELEASE: ${{ env.ANDROID_KEYSTORE_AVAILABLE == 'true' && '0' || '1' }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: flutter build apk --release --split-per-abi
@@ -162,6 +209,17 @@ jobs:
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk fileinfra-${{ env.VERSION }}-android-arm64.apk
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk fileinfra-${{ env.VERSION }}-android-armv7.apk
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk fileinfra-${{ env.VERSION }}-android-x86_64.apk
+      - name: Verify release signing continuity
+        if: env.ANDROID_KEYSTORE_AVAILABLE == 'true'
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          for APK in fileinfra-*-android-*.apk; do
+            CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            if [ "$CERT" != "$ANDROID_RELEASE_CERT_SHA256" ]; then
+              echo "::error::$APK does not use the existing FileInfra signing certificate"
+              exit 1
+            fi
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: android
@@ -191,6 +249,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-pc-windows-msvc
       - name: Compile dufs from source
         run: bash scripts/build_dufs.sh windows-x86_64
@@ -201,6 +260,8 @@ jobs:
         run: cp "${{ github.workspace }}/assets/dufs/dufs-windows-x86_64.dll" build/windows/x64/runner/Release/dufs.dll
       - name: Create zip
         run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath fileinfra-${{ env.VERSION }}-windows-x64.zip
+      - name: Verify packaged Windows startup and native FFI
+        run: ./scripts/verify_windows_bundle.ps1 fileinfra-${{ env.VERSION }}-windows-x64.zip
       - name: Install NSIS
         run: |
           # choco exits 0 even when the community feed 503s and it installs
@@ -244,6 +305,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-unknown-linux-gnu
       - name: Install dependencies
         run: |
@@ -251,6 +313,8 @@ jobs:
           sudo apt-get install -y libgtk-3-dev dpkg-dev libfuse2 cmake ninja-build clang lld llvm libayatana-appindicator3-dev libsecret-1-dev
       - name: Build and package
         run: bash scripts/build_linux.sh x86_64
+      - name: Verify packaged native FFI
+        run: python3 scripts/verify_dufs_ffi.py build/linux/output/fileinfra/libdufs.so
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
@@ -283,6 +347,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-unknown-linux-gnu
       - name: Install dependencies
         run: |
@@ -292,6 +357,8 @@ jobs:
         run: |
           export PATH="$HOME/flutter/bin:$HOME/flutter/bin/cache/dart-sdk/bin:$PATH"
           bash scripts/build_linux.sh aarch64
+      - name: Verify packaged native FFI
+        run: python3 scripts/verify_dufs_ffi.py build/linux/output/fileinfra/libdufs.so
       - uses: actions/upload-artifact@v7
         with:
           name: linux-arm64
@@ -309,6 +376,9 @@ jobs:
         with:
           context: .
           file: docker/linux-compat.Dockerfile
+          build-args: |
+            FLUTTER_VERSION=${{ env.FLUTTER_VERSION }}
+            RUST_VERSION=${{ env.RUST_VERSION }}
           load: true
           tags: fileinfra-compat:latest
           cache-from: type=gha
@@ -324,7 +394,9 @@ jobs:
             -e FILEINFRA_ARCHIVE_SUFFIX=-compat \
             -e DUFS_NO_DEFAULT_FEATURES=1 \
             fileinfra-compat:latest \
-            bash -c "cd /src && bash scripts/build_linux.sh x86_64"
+            bash -ec 'cd /src
+              bash scripts/build_linux.sh x86_64
+              python3 scripts/verify_dufs_ffi.py /out/fileinfra/libdufs.so'
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x64-compat
@@ -350,13 +422,55 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-apple-darwin
       - name: Build and package
         run: bash scripts/build_macos.sh aarch64
+      - name: Verify macOS ARM64 native FFI
+        run: python3 scripts/verify_dufs_ffi.py build/macos/output/FileInfra.app/Contents/MacOS/libdufs.dylib
       - uses: actions/upload-artifact@v7
         with:
           name: macos-arm64
-          path: build/macos/output/*
+          # zip only: the staged FileInfra.app next to it is the same bundle
+          # unpacked (thousands of files) and the release never uses it.
+          path: build/macos/output/*.zip
+
+  build-macos-x64:
+    name: macOS x64 (Intel)
+    # Same Apple Silicon runner as arm64: `flutter build macos --release` is
+    # already universal (arm64 + x86_64), and dufs cross-compiles to
+    # x86_64-apple-darwin with the stock toolchain (upstream dufs builds its
+    # own x86_64-apple-darwin release on macos-latest the same way). No Intel
+    # runner needed. build_macos.sh fails the job if any Mach-O in the bundle
+    # lacks an x86_64 slice.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-x86_64-apple-darwin-${{ hashFiles('scripts/build_dufs.sh') }}
+          restore-keys: |
+            cargo-x86_64-apple-darwin-
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-apple-darwin
+      - name: Build and package
+        run: bash scripts/build_macos.sh x86_64
+      - name: Verify macOS Intel native FFI under Rosetta
+        run: arch -x86_64 /usr/bin/python3 scripts/verify_dufs_ffi.py build/macos/output/FileInfra.app/Contents/MacOS/libdufs.dylib
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-x64
+          path: build/macos/output/*.zip
 
   build-ios:
     name: iOS
@@ -378,12 +492,15 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-apple-ios
       - name: Compile dufs from source
         run: bash scripts/build_dufs.sh ios-arm64
       - name: Build iOS (no codesign)
         run: |
           flutter build ios --release --no-codesign
+          install -m 755 ios/Frameworks/dufs build/ios/iphoneos/Runner.app/dufs
+          test -x build/ios/iphoneos/Runner.app/dufs
           mkdir -p build/ios/output
           APP_NAME="FileInfra"
           VERSION=$(grep 'version:' pubspec.yaml | head -1 | awk '{print $2}' | awk -F'+' '{print $1}')
@@ -392,11 +509,11 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: ios
-          path: build/ios/output/*
+          path: build/ios/output/*.zip
 
   release:
     name: Release
-    needs: [build-android, build-windows, build-linux-x64, build-linux-arm64, build-linux-compat, build-macos-arm64]
+    needs: [lint, build-android, build-windows, build-linux-x64, build-linux-arm64, build-linux-compat, build-macos-arm64, build-macos-x64, build-ios]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -412,21 +529,25 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-          pattern: "{android,windows,ios,macos-arm64,linux-x64,linux-x64-compat,linux-arm64}"
+          pattern: "{android,windows,ios,macos-arm64,macos-x64,linux-x64,linux-x64-compat,linux-arm64}"
       - name: List artifacts
         run: find artifacts -type f
       - name: Build release notes
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
         run: |
-          # Curated, user-facing notes for this tag from CHANGELOG.md, then the
-          # platform/build footer. generate_release_notes below appends the
-          # auto commit list under this body.
-          ver="${{ github.ref_name }}"
+          # Prefer concise public notes; CHANGELOG retains technical details.
+          ver="$VERSION_TAG"
           {
-            awk -v ver="$ver" '
-              index($0, "## [" ver "]")==1 {cap=1; next}
-              cap && (/^## \[/ || /^---[[:space:]]*$/) {exit}
-              cap {print}
-            ' CHANGELOG.md | sed -e '/./,$!d'
+            if [ -f ".github/release_notes/$ver.md" ]; then
+              cat ".github/release_notes/$ver.md"
+            else
+              awk -v ver="$ver" '
+                index($0, "## [" ver "]")==1 {cap=1; next}
+                cap && (/^## \[/ || /^---[[:space:]]*$/) {exit}
+                cap {print}
+              ' CHANGELOG.md | sed -e '/./,$!d'
+            fi
             echo
             cat .github/release_body_footer.md
           } > release_body.md
@@ -434,18 +555,8 @@ jobs:
           cat release_body.md
       - name: Generate checksums
         run: |
-          # F10：release 附件附 sha256 校验清单。只覆盖实际发布的产物类型
-          #（download-artifact 会把未发布的 iOS 包解包成目录树，全量 find
-          # 会把几百个内部文件也写进清单）。
-          cd artifacts
-          find . -type f \( \
-            -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o \
-            -name '*.tar.gz' -o -name '*.apk' -o -name '*.exe' -o \
-            -name '*.dmg' -o -name '*-windows-x64.zip' -o \
-            -name '*-macos-arm64.zip' \) -print0 \
-            | sort -z | xargs -0 sha256sum > checksums.txt
-          echo "----- checksums.txt -----"
-          cat checksums.txt
+          python3 scripts/release_checksums.py artifacts
+          cat artifacts/checksums.txt
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
@@ -459,6 +570,8 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*-windows-x64.zip
             artifacts/**/*-macos-arm64.zip
+            artifacts/**/*-macos-x64.zip
+            artifacts/**/*-ios-arm64.zip
             artifacts/**/*.exe
             artifacts/**/*.dmg
           generate_release_notes: true

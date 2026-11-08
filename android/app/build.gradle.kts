@@ -30,10 +30,11 @@ android {
     signingConfigs {
         create("release") {
             val keystoreFilePath = System.getenv("KEYSTORE_FILE")
-            if (keystoreFilePath != null) {
+            if (!keystoreFilePath.isNullOrBlank()) {
                 storeFile = file(keystoreFilePath)
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
-                keyAlias = System.getenv("KEY_ALIAS") ?: "dufshub"
+                // The existing signing key retains its original alias after the app rename.
+                keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "inout"
                 keyPassword = System.getenv("KEY_PASSWORD") ?: ""
             }
         }
@@ -47,7 +48,12 @@ android {
             // channel, which can never be OTA-upgraded by users who
             // installed it.
             val keystoreFile: String? = System.getenv("KEYSTORE_FILE")
-            signingConfig = if (!keystoreFile.isNullOrBlank()) {
+            // F-Droid signs the APK after building it. Keep unsigned builds an
+            // explicit opt-in so normal release builds still require our key.
+            val unsignedRelease = System.getenv("FILEINFRA_UNSIGNED_RELEASE") == "1"
+            signingConfig = if (unsignedRelease) {
+                null
+            } else if (!keystoreFile.isNullOrBlank()) {
                 signingConfigs.getByName("release")
             } else if (gradle.startParameter.taskNames.any {
                     it.contains("Release", ignoreCase = true) ||
@@ -75,8 +81,17 @@ android {
         includeInApk = false
         includeInBundle = false
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

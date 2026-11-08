@@ -9,7 +9,6 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
-import '../constants.dart';
 import '../l10n/app_localizations.dart';
 import '../models/server_config.dart';
 import '../services/dufs_service.dart';
@@ -52,7 +51,6 @@ class _HomePageState extends State<HomePage>
   bool _isServerTransitioning = false;
   bool _isStoppingServer = false;
   Timer? _portSaveDebounce;
-  static const _ch = MethodChannel(kMethodChannel);
 
   AppLocalizations get l10n => AppLocalizations(_config.language);
 
@@ -69,6 +67,9 @@ class _HomePageState extends State<HomePage>
       _usernameController.text = parts[0];
       _passwordController.text = parts.sublist(1).join(':');
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _checkServerOnResume();
+    });
   }
 
   @override
@@ -84,59 +85,18 @@ class _HomePageState extends State<HomePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      // Remember if server was running when app goes to background
-      _serverWasRunning = context.read<DufsService>().isRunning;
-    } else if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed) {
       _checkServerOnResume();
     }
   }
 
   /// App 恢复前台时检测并恢复服务状态
-  /// 策略：查询 Native Service 状态，如果在跑则同步 UI；否则清理后重启
+  /// Native Service 决定运行状态；恢复工具服务或清理已停止的本地状态。
   Future<void> _checkServerOnResume() async {
     if (!Platform.isAndroid) return;
     final service = context.read<DufsService>();
-
-    // 1. Check if Native Service is still running (the source of truth on Android)
-    final info = await _ch.invokeMethod<Map>('getServiceInfo');
-    if (info != null && info['isRunning'] == true) {
-      debugPrint('Native service running on resume, restoring UI state');
-      if (!service.isRunning) {
-        await service.restoreFromService();
-      }
-      return;
-    }
-
-    // 2. Native Service not running — if we think we're running, clean up
-    if (service.isRunning) {
-      debugPrint(
-        'Service reports not running but Dart thinks it is, cleaning up',
-      );
-      await service.stopServer();
-      return;
-    }
-
-    // 3. Check for orphan dufs on the port
-    final inUse = await service.isPortInUse(_config.port);
-    if (inUse) {
-      debugPrint('Port ${_config.port} in use on resume, killing orphan dufs');
-      await service.killOrphanOnPort(_config.port);
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-
-    // 4. If server was running before activity was destroyed, restart it
-    if (_serverWasRunning) {
-      debugPrint('Restarting dufs after activity resume');
-      _serverWasRunning = false;
-      await _saveConfig();
-      if (_enableAuth && _config.auth == null) return;
-      await service.startServer(_config);
-    }
+    await service.restoreFromService();
   }
-
-  /// 追踪服务是否在运行（用于 activity 恢复后自动重启）
-  bool _serverWasRunning = false;
 
   Future<void> _saveConfig() async {
     _config.auth = _buildAuth();
@@ -282,9 +242,9 @@ class _HomePageState extends State<HomePage>
     // 用户取消（result==null）不是失败，静默；仅工具抛异常才提示。
     if (pickerFailed) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.t('home.pickDirFailed'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.t('home.pickDirFailed'))));
     }
   }
 
@@ -367,9 +327,9 @@ class _HomePageState extends State<HomePage>
     } catch (e) {
       debugPrint('pickFile failed: $e');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.t('home.pickDirFailed'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.t('home.pickDirFailed'))));
       return;
     }
     final pickedPath = picked?.path;
@@ -388,7 +348,7 @@ class _HomePageState extends State<HomePage>
     return GestureDetector(
       onPanStart: (_) => windowManager.startDragging(),
       child: Container(
-        height: 40,
+        height: 48,
         color: Colors.transparent,
         child: Row(
           children: [
@@ -412,10 +372,12 @@ class _HomePageState extends State<HomePage>
             const Spacer(),
             _TitleBarButton(
               icon: Icons.remove,
+              tooltip: l10n.t('window.minimize'),
               onPressed: () => windowManager.minimize(),
             ),
             _TitleBarButton(
               icon: Icons.crop_square,
+              tooltip: l10n.t('window.toggleMaximize'),
               onPressed: () async {
                 if (await windowManager.isMaximized()) {
                   windowManager.unmaximize();
@@ -426,6 +388,7 @@ class _HomePageState extends State<HomePage>
             ),
             _TitleBarButton(
               icon: Icons.close,
+              tooltip: l10n.t('window.close'),
               isClose: true,
               onPressed: () => _handleClose(),
             ),
@@ -535,7 +498,7 @@ class _HomePageState extends State<HomePage>
                 FilledButton.tonalIcon(
                   onPressed: _pickDirectory,
                   style: FilledButton.styleFrom(
-                    minimumSize: const Size(112, 44),
+                    minimumSize: const Size(112, 48),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 12,
@@ -547,7 +510,7 @@ class _HomePageState extends State<HomePage>
                 FilledButton.tonalIcon(
                   onPressed: _pickFile,
                   style: FilledButton.styleFrom(
-                    minimumSize: const Size(112, 44),
+                    minimumSize: const Size(112, 48),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 12,
@@ -742,7 +705,10 @@ class _HomePageState extends State<HomePage>
         final notice = service.portInfo;
         if (notice != null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(notice), duration: const Duration(seconds: 4)),
+            SnackBar(
+              content: Text(notice),
+              duration: const Duration(seconds: 4),
+            ),
           );
           service.clearPortInfo();
         }
@@ -776,6 +742,17 @@ class _HomePageState extends State<HomePage>
             : Icon(running ? Icons.stop : Icons.play_arrow),
         label: Text(label, style: const TextStyle(fontSize: 16)),
         style: FilledButton.styleFrom(
+          foregroundColor: busy
+              ? Theme.of(context).colorScheme.onSecondary
+              : running
+              ? Theme.of(context).colorScheme.onError
+              : Theme.of(context).colorScheme.onPrimary,
+          disabledBackgroundColor: busy
+              ? Theme.of(context).colorScheme.secondary
+              : null,
+          disabledForegroundColor: busy
+              ? Theme.of(context).colorScheme.onSecondary
+              : null,
           backgroundColor: busy
               ? Theme.of(context).colorScheme.secondary
               : running
@@ -902,26 +879,31 @@ class _HomePageState extends State<HomePage>
                   context,
                 ).showSnackBar(SnackBar(content: Text(l10n.t('home.copyUrl'))));
               },
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Flexible(
-                    child: Text(
-                      service.serverUrl!,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onPrimaryContainer,
-                        decoration: TextDecoration.underline,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 48),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        service.serverUrl!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
+                          decoration: TextDecoration.underline,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.copy,
-                    size: 14,
-                    color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.copy,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 4),
@@ -929,67 +911,85 @@ class _HomePageState extends State<HomePage>
             Text(
               '${l10n.t('home.localIp')}: ${service.preferredAddress ?? service.localIp ?? 'N/A'}',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(
-                  context,
-                ).colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
               ),
             ),
             const SizedBox(height: 2),
             Text(
               l10n.t('home.scanHint'),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(
-                  context,
-                ).colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
               ),
             ),
             const SizedBox(height: 8),
-            // 共享剪贴板入口
+            // Tools URL uses its own bounded row so long IPv6 URLs can shrink.
             if (service.clipboardUrl != null)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Column(
                 children: [
-                  Icon(Icons.content_paste, size: 16, color: Theme.of(context).colorScheme.onPrimaryContainer),
-                  const SizedBox(width: 6),
-                  Text(
-                    l10n.t('home.clipboard'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w500,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: Icon(Icons.qr_code, size: 18),
-                    onPressed: () => _showQrDialog(service.clipboardUrl!),
-                    tooltip: l10n.t('home.qrCode'),
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    padding: EdgeInsets.zero,
-                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.content_paste,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          l10n.t('home.clipboard'),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w500,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onPrimaryContainer,
+                              ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.qr_code, size: 18),
+                        onPressed: () => _showQrDialog(service.clipboardUrl!),
+                        tooltip: l10n.t('home.qrCode'),
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                    ],
                   ),
                   InkWell(
                     onTap: () {
-                      Clipboard.setData(ClipboardData(text: service.clipboardUrl!));
+                      Clipboard.setData(
+                        ClipboardData(text: service.clipboardUrl!),
+                      );
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text(l10n.t('home.copyUrl'))),
                       );
                     },
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            service.clipboardUrl!,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              decoration: TextDecoration.underline,
-                              color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              service.clipboardUrl!,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    decoration: TextDecoration.underline,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onPrimaryContainer,
+                                  ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        const SizedBox(width: 4),
-                        Icon(Icons.copy, size: 14, color: Theme.of(context).colorScheme.onPrimaryContainer),
-                      ],
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.copy,
+                            size: 14,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onPrimaryContainer,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -1073,9 +1073,11 @@ class _HomePageState extends State<HomePage>
                 color: Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 8),
-              Text(
-                l10n.t('home.allAddresses'),
-                style: Theme.of(context).textTheme.titleSmall,
+              Flexible(
+                child: Text(
+                  l10n.t('home.allAddresses'),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
               ),
             ],
           ),
@@ -1099,10 +1101,7 @@ class _HomePageState extends State<HomePage>
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 4,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isDefault
                       ? Theme.of(
@@ -1131,42 +1130,49 @@ class _HomePageState extends State<HomePage>
                       },
                       tooltip: l10n.t('home.setDefault'),
                       constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
+                        minWidth: 48,
+                        minHeight: 48,
                       ),
                       padding: EdgeInsets.zero,
                     ),
-                    if (ifaceName.isNotEmpty) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.outline.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          ifaceName,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color:
-                                    Theme.of(context).colorScheme.outline,
-                              ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
                     Expanded(
-                      child: Text(
-                        url,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontWeight: isDefault ? FontWeight.w600 : null,
-                          decoration: TextDecoration.underline,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (ifaceName.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.outline.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                ifaceName,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ),
+                          Text(
+                            url,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  fontWeight: isDefault
+                                      ? FontWeight.w600
+                                      : null,
+                                  decoration: TextDecoration.underline,
+                                ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
                     ),
                     // 二维码按钮
@@ -1179,8 +1185,8 @@ class _HomePageState extends State<HomePage>
                       onPressed: () => _showQrDialog(url),
                       tooltip: l10n.t('home.qrCode'),
                       constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
+                        minWidth: 48,
+                        minHeight: 48,
                       ),
                       padding: EdgeInsets.zero,
                     ),
@@ -1189,8 +1195,9 @@ class _HomePageState extends State<HomePage>
                       icon: Icon(
                         Icons.copy,
                         size: 16,
-                        color: Theme.of(context).colorScheme.outline,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
+                      tooltip: l10n.t('home.copyAddress'),
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: url));
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1200,8 +1207,8 @@ class _HomePageState extends State<HomePage>
                         );
                       },
                       constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
+                        minWidth: 48,
+                        minHeight: 48,
                       ),
                       padding: EdgeInsets.zero,
                     ),
@@ -1219,51 +1226,59 @@ class _HomePageState extends State<HomePage>
   void _showQrDialog(String url) {
     showModalBottomSheet<void>(
       context: context,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: QrImageView(
+                  data: url,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                ),
               ),
-              child: QrImageView(
-                data: url,
-                version: QrVersions.auto,
-                size: 200,
-                backgroundColor: Colors.white,
+              const SizedBox(height: 16),
+              InkWell(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: url));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(l10n.t('home.copyUrl'))),
+                  );
+                  Navigator.pop(ctx);
+                },
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Center(
+                    child: Text(
+                      url,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        decoration: TextDecoration.underline,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            InkWell(
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: url));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(l10n.t('home.copyUrl'))),
-                );
-                Navigator.pop(ctx);
-              },
-              child: Text(
-                url,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  decoration: TextDecoration.underline,
-                  color: Theme.of(context).colorScheme.primary,
+              const SizedBox(height: 12),
+              Text(
+                l10n.t('home.scanHint'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
                 textAlign: TextAlign.center,
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              l10n.t('home.scanHint'),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.outline,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1284,9 +1299,7 @@ class _HomePageState extends State<HomePage>
         Icon(
           icon,
           size: 18,
-          color: Theme.of(
-            context,
-          ).colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+          color: Theme.of(context).colorScheme.onPrimaryContainer,
         ),
         const SizedBox(height: 2),
         Text(
@@ -1299,9 +1312,7 @@ class _HomePageState extends State<HomePage>
         Text(
           label,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: Theme.of(
-              context,
-            ).colorScheme.onPrimaryContainer.withValues(alpha: 0.6),
+            color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
         ),
       ],
@@ -1406,8 +1417,10 @@ class _HomePageState extends State<HomePage>
                   _config.port = port;
                   // 敲"5000"会触发 4 次保存写盘；防抖 500ms，回车立即落盘
                   _portSaveDebounce?.cancel();
-                  _portSaveDebounce =
-                      Timer(const Duration(milliseconds: 500), _saveConfig);
+                  _portSaveDebounce = Timer(
+                    const Duration(milliseconds: 500),
+                    _saveConfig,
+                  );
                 }
               },
             ),
@@ -1454,6 +1467,11 @@ class _HomePageState extends State<HomePage>
                   labelText: l10n.t('home.password'),
                   prefixIcon: const Icon(Icons.lock),
                   suffixIcon: IconButton(
+                    tooltip: l10n.t(
+                      _obscurePassword
+                          ? 'home.showPassword'
+                          : 'home.hidePassword',
+                    ),
                     icon: Icon(
                       _obscurePassword
                           ? Icons.visibility_off
@@ -1593,7 +1611,7 @@ class _HomePageState extends State<HomePage>
                       Text(
                         l10n.t('app.slogan'),
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.outline,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -1667,15 +1685,19 @@ class _HomePageState extends State<HomePage>
                         Icon(
                           Icons.info_outline,
                           size: 14,
-                          color: Theme.of(context).colorScheme.outline,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                         const SizedBox(width: 4),
-                        Text(
-                          l10n.t('home.restartHint'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(context).colorScheme.outline,
-                              ),
+                        Flexible(
+                          child: Text(
+                            l10n.t('home.restartHint'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
                         ),
                       ],
                     ),
@@ -1773,7 +1795,9 @@ class _HomePageState extends State<HomePage>
               _buildTitleBar(),
             Expanded(
               child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : const Duration(milliseconds: 150),
                 child: KeyedSubtree(
                   key: ValueKey(_navIndex),
                   child: pages[_navIndex],
@@ -1859,10 +1883,12 @@ class _HomePageState extends State<HomePage>
 // Title bar button widget
 class _TitleBarButton extends StatelessWidget {
   final IconData icon;
+  final String tooltip;
   final VoidCallback onPressed;
   final bool isClose;
   const _TitleBarButton({
     required this.icon,
+    required this.tooltip,
     required this.onPressed,
     this.isClose = false,
   });
@@ -1870,23 +1896,28 @@ class _TitleBarButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 40,
-      height: 40,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onPressed,
-          hoverColor: isClose
-              ? Colors.red.withValues(alpha: 0.8)
-              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08),
-          child: Icon(
-            icon,
-            size: 16,
-            color: isClose
-                ? null
+      width: 48,
+      height: 48,
+      child: Tooltip(
+        message: tooltip,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onPressed,
+            hoverColor: isClose
+                ? Colors.red.withValues(alpha: 0.8)
                 : Theme.of(
                     context,
-                  ).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ).colorScheme.onSurface.withValues(alpha: 0.08),
+            child: Icon(
+              icon,
+              size: 16,
+              color: isClose
+                  ? null
+                  : Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
           ),
         ),
       ),
@@ -1917,7 +1948,18 @@ class _BouncingDotsState extends State<_BouncingDots>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
-    )..repeat();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _ctrl.stop();
+      _ctrl.value = 0.5;
+    } else if (!_ctrl.isAnimating) {
+      _ctrl.repeat();
+    }
   }
 
   @override

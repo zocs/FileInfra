@@ -10,11 +10,14 @@ import android.util.Log
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.UUID
 
 class DufsForegroundService : Service() {
 
     @Volatile
     private var dufsProcess: Process? = null
+    @Volatile
+    private var startingGeneration: Int? = null
 
     companion object {
         private const val TAG = "fileinfra"
@@ -58,6 +61,14 @@ class DufsForegroundService : Service() {
         @Volatile
         var startGeneration = 0
             private set
+        private var runningGeneration = 0
+        @Volatile
+        private var clipboardSendToken: String? = null
+        var stoppedListener: ((Int) -> Unit)? = null
+
+        fun isAuthorizedClipboardSend(generation: Int, token: String?): Boolean =
+            token != null && token == clipboardSendToken &&
+                isRunning && generation == startGeneration
 
         /// 让快捷磁贴直接用 App 上次成功下发的一组启动参数重启服务
         ///（App 未运行时 Dart 侧不可达）。args 含 --auth 明文，落点是
@@ -79,7 +90,9 @@ class DufsForegroundService : Service() {
                     .putExtra("args", args.toTypedArray())
                     .putExtra("lang", prefs.getString("lang", "en") ?: "en")
                     .putExtra("address", prefs.getString("address", "") ?: "")
-                    .putExtra("clipboardAddress", prefs.getString("clipboardAddress", "") ?: "")
+                    // A native tile launch cannot create the Dart tools listener.
+                    .putExtra("clipboardAddress", "")
+                    .putExtra("notifClipboard", prefs.getBoolean("notifClipboard", true))
             } catch (_: Exception) {
                 null
             }
@@ -88,10 +101,12 @@ class DufsForegroundService : Service() {
         /// 通知/磁贴侧的停止入口。startForegroundService 语义下
         /// onStartCommand 必须调 startForeground（ACTION_STOP 分支已保证），
         /// 退回 startService 仅在两者都失败时放弃。
-        fun requestStop(context: Context) {
+        fun requestStop(context: Context, generation: Int? = startGeneration) {
             val i = Intent(context, DufsForegroundService::class.java).setAction(ACTION_STOP)
+            generation?.let { i.putExtra("generation", it) }
             try {
-                context.startForegroundService(i)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(i)
+                else context.startService(i)
             } catch (e: Exception) {
                 Log.w(TAG, "startForegroundService(STOP) failed: ${e.message}")
                 try {
@@ -104,9 +119,10 @@ class DufsForegroundService : Service() {
 
         /// 用户切换默认地址后由 Dart 侧经 MethodChannel 调用：只更新
         /// 通知栏地址（含持久化，磁贴重启后仍能恢复），不重启服务。
-        fun updateAddress(context: Context, address: String, clipboardAddress: String) {
-            if (!isRunning) return
+        fun updateAddress(context: Context, address: String, clipboardAddress: String, generation: Int? = null) {
+            if (!isRunning || (generation != null && generation != startGeneration)) return
             currentAddress = address
+            currentClipboardAddress = clipboardAddress
             try {
                 context.getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString("address", address)
@@ -129,6 +145,7 @@ class DufsForegroundService : Service() {
         /// 设置页切换「通知栏剪贴板按钮」开关后由 Dart 侧经 MethodChannel 调用：
         /// 持久化新值并即时重建通知栏（服务未运行时只存 prefs，下次启动生效）。
         fun updateClipboardButtons(context: Context, enabled: Boolean) {
+            if (!enabled) clipboardSendToken = null
             try {
                 context.getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putBoolean("notifClipboard", enabled)
@@ -155,13 +172,14 @@ class DufsForegroundService : Service() {
             context: Context, port: Int, address: String, clipboardAddress: String,
             path: String, lang: String, notifClipboard: Boolean = true
         ): Notification {
-            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            val intent = Intent(context, MainActivity::class.java)
             val pendingIntent = PendingIntent.getActivity(
                 context, 0, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 
             val stopIntent = Intent(context, DufsForegroundService::class.java).setAction(ACTION_STOP)
+                .putExtra("generation", startGeneration)
             val stopPendingIntent = PendingIntent.getService(
                 context, 1, stopIntent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -170,6 +188,10 @@ class DufsForegroundService : Service() {
             val showClipboardButtons = notifClipboard
 
             val clipboardPort = clipboardAddress.substringAfterLast(":").toIntOrNull()
+            val sendToken = if (showClipboardButtons && clipboardPort in 1..65535) {
+                UUID.randomUUID().toString()
+            } else null
+            clipboardSendToken = sendToken
 
             val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(context, CHANNEL_ID)
@@ -218,15 +240,19 @@ class DufsForegroundService : Service() {
                 .setOngoing(true)
 
             // 剪贴板按钮（发送/拉取）
-            if (showClipboardButtons && clipboardPort != null) {
-                val sendIntent = Intent(context, DufsForegroundService::class.java)
+            if (sendToken != null) {
+                val sendIntent = Intent(context, MainActivity::class.java)
                     .setAction(ACTION_SEND_CLIPBOARD)
-                val sendPendingIntent = PendingIntent.getService(
+                    .putExtra("generation", startGeneration)
+                    .putExtra("clipboardRequestToken", sendToken)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                val sendPendingIntent = PendingIntent.getActivity(
                     context, 2, sendIntent,
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
                 val pullIntent = Intent(context, DufsForegroundService::class.java)
                     .setAction(ACTION_PULL_CLIPBOARD)
+                    .putExtra("generation", startGeneration)
                 val pullPendingIntent = PendingIntent.getService(
                     context, 3, pullIntent,
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -263,17 +289,36 @@ class DufsForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
+        if (flags and START_FLAG_REDELIVERY != 0 &&
+            (action == ACTION_SEND_CLIPBOARD || action == ACTION_PULL_CLIPBOARD)) {
+            // A control action can be the latest delivered service intent.
+            // Recover the saved file share after a system kill, without
+            // replaying captured clipboard text from the old session.
+            return onStartCommand(readLastLaunch(this), 0, startId)
+        }
         if (action == ACTION_STOP) {
+            if (intent?.hasExtra("generation") == true &&
+                intent.getIntExtra("generation", -1) != startGeneration) {
+                if (!isRunning && startingGeneration == null) {
+                    stopWithForegroundContract()
+                    return START_NOT_STICKY
+                }
+                return START_REDELIVER_INTENT
+            }
             handleStop()
             return START_NOT_STICKY
         }
         if (action == ACTION_SEND_CLIPBOARD) {
-            handleSendClipboard()
-            return START_NOT_STICKY
+            if (intent?.getIntExtra("generation", -1) == startGeneration && isRunning) {
+                intent.getStringExtra("text")?.let { handleSendClipboard(it, startGeneration) }
+            }
+            return START_REDELIVER_INTENT
         }
         if (action == ACTION_PULL_CLIPBOARD) {
-            handlePullClipboard()
-            return START_NOT_STICKY
+            if (intent?.getIntExtra("generation", -1) == startGeneration && isRunning) {
+                handlePullClipboard(startGeneration)
+            }
+            return START_REDELIVER_INTENT
         }
 
         val port = intent?.getIntExtra("port", 0) ?: 0
@@ -281,7 +326,9 @@ class DufsForegroundService : Service() {
         val args = intent?.getStringArrayExtra("args") ?: emptyArray()
         val lang = intent?.getStringExtra("lang") ?: "en"
         val address = intent?.getStringExtra("address") ?: ""
-        val clipboardAddress = intent?.getStringExtra("clipboardAddress") ?: ""
+        // Start/redelivery precedes Dart tools binding; only updateAddress may
+        // advertise a listener confirmed by the current Flutter engine.
+        val clipboardAddress = ""
         val notifClipboard = intent?.getBooleanExtra("notifClipboard", true) ?: true
 
         // Clear the previous run's failure at entry (before the lock): Dart's
@@ -321,6 +368,7 @@ class DufsForegroundService : Service() {
             startGeneration++
             gen = startGeneration
             killDufs()
+            startingGeneration = gen
             persistLaunch(port, path, args, lang, address, clipboardAddress, notifClipboard)
 
             val notification = buildNotification(this, port, address, clipboardAddress, path, lang, notifClipboard)
@@ -342,7 +390,7 @@ class DufsForegroundService : Service() {
         }
 
         Thread {
-            val proc = startDufs(port, path, args)
+            val proc = startDufs(port, path, args, gen)
             synchronized(startLock) {
                 if (gen != startGeneration) {
                     // A newer start/stop superseded us — kill OUR child too:
@@ -351,13 +399,17 @@ class DufsForegroundService : Service() {
                     Log.w(TAG, "start gen=$gen superseded, killing stray child")
                     killProcess(proc)
                 } else if (proc != null) {
+                    startingGeneration = null
                     currentPort = port
                     currentPath = path
                     currentAddress = address
                     currentClipboardAddress = clipboardAddress
+                    runningGeneration = gen
                     isRunning = true
+                    watchChild(proc, gen)
                     Log.d(TAG, "Service started: port=$port path=$path address=$address clipboard=$clipboardAddress")
                 } else {
+                    startingGeneration = null
                     Log.e(TAG, "Failed to start dufs, stopping service (gen=$gen)")
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -450,59 +502,63 @@ class DufsForegroundService : Service() {
         }
     }
 
-    /// 发送剪贴板：读系统剪贴板 → POST 到本机剪贴板服务的 /api/clipboard，
-    /// 由服务广播给所有已连接的工具页。后台线程执行（网络/剪贴板都不可在主线程）。
-    private fun handleSendClipboard() {
+    /// The focused Activity captures the clipboard; this worker only posts text.
+    private fun handleSendClipboard(text: String, generation: Int) {
+        val address = currentClipboardAddress
         Thread {
+            var conn: java.net.HttpURLConnection? = null
             try {
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val clip = cm.primaryClip ?: return@Thread
-                if (clip.itemCount == 0) return@Thread
-                val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return@Thread
-                if (text.isEmpty()) return@Thread
-                val port = currentClipboardAddress.substringAfterLast(":").toIntOrNull() ?: return@Thread
-                val url = java.net.URL("http://127.0.0.1:$port/api/clipboard")
-                val conn = url.openConnection() as java.net.HttpURLConnection
+                if (!isRunning || generation != startGeneration || text.isEmpty()) return@Thread
+                val port = java.net.URI(address).port
+                if (port !in 1..65535) return@Thread
+                conn = java.net.URL("http://127.0.0.1:$port/api/clipboard")
+                    .openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 conn.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
-                val code = conn.responseCode
-                Log.d(TAG, "send clipboard -> HTTP $code")
-                conn.disconnect()
+                Log.d(TAG, "send clipboard -> HTTP ${conn.responseCode}")
             } catch (e: Exception) {
                 Log.w(TAG, "send clipboard failed: ${e.message}")
+            } finally {
+                conn?.disconnect()
             }
         }.start()
     }
 
-    /// 拉取剪贴板：GET 本机剪贴板服务的 /api/clipboard，把共享内容写入系统剪贴板。
-    private fun handlePullClipboard() {
+    /// Pull can write the system clipboard while the activity is in background.
+    private fun handlePullClipboard(generation: Int) {
+        val address = currentClipboardAddress
         Thread {
+            var conn: java.net.HttpURLConnection? = null
             try {
-                val port = currentClipboardAddress.substringAfterLast(":").toIntOrNull() ?: return@Thread
-                val url = java.net.URL("http://127.0.0.1:$port/api/clipboard")
-                val conn = url.openConnection() as java.net.HttpURLConnection
+                if (!isRunning || generation != startGeneration) return@Thread
+                val port = java.net.URI(address).port
+                if (port !in 1..65535) return@Thread
+                conn = java.net.URL("http://127.0.0.1:$port/api/clipboard")
+                    .openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
                 if (conn.responseCode != 200) {
                     Log.w(TAG, "pull clipboard HTTP ${conn.responseCode}")
-                    conn.disconnect()
                     return@Thread
                 }
-                val json = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
-                conn.disconnect()
-                val obj = org.json.JSONObject(json)
-                val text = obj.optString("text", "")
+                val json = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                val text = org.json.JSONObject(json).optString("text", "")
                 if (text.isEmpty()) return@Thread
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("FileInfra", text))
-                Log.d(TAG, "pull clipboard <- ${text.length} chars")
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (isRunning && generation == startGeneration) {
+                        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("FileInfra", text))
+                    }
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "pull clipboard failed: ${e.message}")
+            } finally {
+                conn?.disconnect()
             }
         }.start()
     }
@@ -512,7 +568,52 @@ class DufsForegroundService : Service() {
     /// startLock, gated on the start generation.
     /// Returns the child process on success, null on failure (own child
     /// already killed on failure paths).
-    private fun startDufs(port: Int, path: String, args: Array<String>): Process? {
+    private fun claimChild(proc: Process, generation: Int): Boolean {
+        synchronized(startLock) {
+            if (generation == startGeneration) {
+                dufsProcess = proc
+                return true
+            }
+        }
+        killProcess(proc)
+        return false
+    }
+
+    private fun publishStartError(generation: Int, error: String) {
+        synchronized(startLock) {
+            if (generation == startGeneration) lastError = error
+        }
+    }
+
+    private fun releaseChild(proc: Process?) {
+        synchronized(startLock) {
+            if (proc != null && dufsProcess === proc) dufsProcess = null
+        }
+    }
+
+    private fun watchChild(proc: Process, generation: Int): Thread = Thread({
+        val code = try { proc.waitFor() } catch (_: Exception) { return@Thread }
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            synchronized(startLock) {
+                // Intentional stop and replacement starts already own cleanup.
+                if (generation != startGeneration || dufsProcess !== proc || !isRunning) {
+                    return@post
+                }
+                lastError = "dufs process exited unexpectedly (code $code)"
+                Log.e(TAG, lastError!!)
+                startGeneration++
+                killDufs()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            DufsQsTile.requestUpdate(this)
+        }
+    }, "fileinfra-dufs-exit-$generation").apply {
+        isDaemon = true
+        start()
+    }
+
+    private fun startDufs(port: Int, path: String, args: Array<String>, generation: Int): Process? {
         var proc: Process? = null
         return try {
             val nativeLibDir = applicationInfo.nativeLibraryDir
@@ -552,7 +653,7 @@ class DufsForegroundService : Service() {
             pb.redirectError(errLog)
             pb.redirectOutput(outLog)
             proc = pb.start()
-            dufsProcess = proc
+            if (!claimChild(proc, generation)) return null
 
             val ready = waitForServerReady(proc, port)
             if (!ready) {
@@ -567,26 +668,28 @@ class DufsForegroundService : Service() {
                     try { errLog.writeText(errOutput) } catch (_: Exception) {}
                 }
                 val alive = isAlive(proc)
-                lastError = if (!alive) {
+                val error = if (!alive) {
                     "dufs process exited during startup${if (errOutput.isNotEmpty()) ": $errOutput" else ""}"
                 } else {
                     "dufs did not start listening on port $port${if (errOutput.isNotEmpty()) ": $errOutput" else ""}"
                 }
-                Log.e(TAG, lastError ?: "")
+                publishStartError(generation, error)
+                Log.e(TAG, error)
                 killProcess(proc)
-                if (dufsProcess === proc) dufsProcess = null
+                releaseChild(proc)
                 null
             } else {
                 Log.d(TAG, "dufs verified listening on port=$port")
                 proc
             }
         } catch (e: Exception) {
-            lastError = "Failed to start dufs: ${e.message}"
-            Log.e(TAG, lastError ?: "", e)
+            val error = "Failed to start dufs: ${e.message}"
+            publishStartError(generation, error)
+            Log.e(TAG, error, e)
             // Kill via the local handle: nulling the shared field without
             // destroying would orphan a live child no later killDufs() reach.
             killProcess(proc)
-            if (proc != null && dufsProcess === proc) dufsProcess = null
+            releaseChild(proc)
             null
         }
     }
@@ -643,13 +746,21 @@ class DufsForegroundService : Service() {
     }
 
     private fun killDufs() {
+        clipboardSendToken = null
+        val stoppedGeneration = if (isRunning) runningGeneration else null
         killProcess(dufsProcess)
         dufsProcess = null
+        startingGeneration = null
         isRunning = false
         currentPort = 0
         currentPath = ""
         currentAddress = ""
         currentClipboardAddress = ""
+        if (stoppedGeneration != null) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                stoppedListener?.invoke(stoppedGeneration)
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

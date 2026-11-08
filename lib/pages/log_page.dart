@@ -321,13 +321,19 @@ class LogPage extends StatelessWidget {
   ///
   /// 防逃逸两道闸：① 拒绝任何 `..` 段（`File.uri` 不会规范化点段，
   /// 仅靠前缀比较挡不住 `/share/../x` 与 `%2e%2e%2f` 解码形式）；
-  /// ② canonicalize 后做带分隔符的前缀比较（顺带覆盖符号链接指向
-  /// 根外的情况——代价是 allowSymlink 分享里点击外链文件会被拒，
-  /// 安全优先）。
+  /// ② 解析真实文件系统路径后检查是否位于根目录内，根目录本身也解析
+  /// 符号链接。allowSymlink 分享里点击指向根外的链接仍会被拒。
   static String? resolveTarget(String reqPath, String root) {
     if (root.isEmpty) return null;
-    if (FileSystemEntity.typeSync(root) == FileSystemEntityType.file) {
-      return root;
+    final String rootReal;
+    try {
+      final rootType = FileSystemEntity.typeSync(root);
+      if (rootType == FileSystemEntityType.notFound) return null;
+      rootReal = File(root).resolveSymbolicLinksSync();
+      if (rootType == FileSystemEntityType.file) return rootReal;
+      if (rootType != FileSystemEntityType.directory) return null;
+    } on FileSystemException {
+      return null;
     }
     final candidates = <String>{reqPath};
     final q = reqPath.indexOf('?');
@@ -337,16 +343,24 @@ class LogPage extends StatelessWidget {
         candidates.add(Uri.decodeComponent(c));
       } catch (_) {}
     }
-    final rootAbs = p.canonicalize(root);
+    // Check every decoded form before trying literal filenames; an existing
+    // '%2e%2e' directory must not bypass the traversal guard.
+    if (candidates.any((c) => c.split(RegExp(r'[/\\]')).contains('..'))) {
+      return null;
+    }
     for (final c in candidates) {
       final rel = c.startsWith('/') ? c.substring(1) : c;
-      if (rel.split(RegExp(r'[/\\]')).contains('..')) continue;
-      final full = p.canonicalize(p.join(rootAbs, rel));
-      if (full != rootAbs && !full.startsWith('$rootAbs${p.separator}')) {
+      final full = p.join(rootReal, rel);
+      if (!p.equals(full, rootReal) && !p.isWithin(rootReal, full)) {
         continue;
       }
-      if (FileSystemEntity.typeSync(full) != FileSystemEntityType.notFound) {
-        return full;
+      try {
+        final real = File(full).resolveSymbolicLinksSync();
+        if (p.equals(real, rootReal) || p.isWithin(rootReal, real)) {
+          return real;
+        }
+      } on FileSystemException {
+        // Missing files, dangling links and inaccessible paths are unavailable.
       }
     }
     return null;

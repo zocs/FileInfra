@@ -18,7 +18,18 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    )..forward();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _ctrl.stop();
+      _ctrl.value = 1;
+    } else if (!_ctrl.isAnimating && !_ctrl.isCompleted) {
+      _ctrl.forward();
+    }
   }
 
   @override

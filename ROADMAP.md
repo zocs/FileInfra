@@ -1,6 +1,10 @@
 # FileInfra Roadmap
 
-## Current Status (2026-09-02)
+## Current Status (2026-11-09)
+
+Latest published release: **v0.5.12**. The current **v0.5.13+58** candidate contains the reviewed UI/clipboard/lifecycle fixes, dufs 0.47 upstream merge, desktop packaging corrections and expanded CI gates. Full-source review and final branch/release validation are in progress; publication and delivery will be recorded after they complete.
+
+Windows distribution is x64; Flutter has no Windows 32-bit x86 target. Linux x64 compat targets glibc 2.27, while normal x64/ARM64 packages declare actual ELF dependencies. macOS targets 13.0 and uses ad-hoc signatures without Developer ID/notarization. iOS is an experimental unsigned build. F-Droid preparation exists, but submission is postponed.
 
 ### v0.5.x Released
 - [x] **v0.5.1** (2026-08-22): full code review batch, Android quick-settings tile, notification enhancements
@@ -12,9 +16,18 @@
 - [x] **v0.5.7** (2026-08-31): Tools page (clipboard + QR generator two-tab, multi-row, style/color options, SVG download), offline `/qr?text=...` route, notification clipboard buttons (toggleable), `/api/clipboard` endpoint, Ubuntu 18.04 compat builds (`*-compat-linux-x86_64.*`)
 - [x] **v0.5.8** (2026-09-02): Ubuntu 18.04 compat blockers (keyring-less save + no-portal picker), Android 10 EMUI scoped-storage non-blocking startup (warning banner), v0.5.7 code-review batch (trilingual notif buttons, QR overflow 400, 1MB POST cap, WS binary guard, settings live-apply); docs alignment (ROADMAP/CHANGELOG/zh-CN fastlane backfill)
 - [x] **v0.5.9** (2026-09-02): fake-running fix after stop+quick-restart (Kotlin dedup validates child-process aliveness), desktop stop latency ~1s→~100ms, startup service verification (TCP + HTTP probes, UI flips instantly, background rollback on failure)
+- [x] **v0.5.10** (2026-09): native Linux directory chooser and automatic release artifact-download fix
+- [x] **v0.5.11** (2026-09): Ubuntu 18.04 compat directory chooser environment/argument/exit handling
+- [x] **v0.5.12** (2026-10): copied clipboard text separated from timestamps, tools/Android documentation
 
-### Post-v0.5.9 (main)
-- （暂无未发版改动）
+### v0.5.13 candidate
+- [x] Review the previous macOS/UI changes and preserve justified fixes
+- [x] Exact clipboard text, ES5 tools page, copy fallback/manual recovery and Origin/body limits
+- [x] Typed configuration recovery, real filesystem containment and setup appearance propagation
+- [x] Private AppImage staging, app-local Windows runtimes, Linux dependency/ownership and macOS seal checks
+- [ ] Finish review follow-ups, full regression and cross-platform CI
+- [ ] Merge tested upstream/fork and FileInfra changes, publish fresh patch tag and verify release assets
+- [ ] Deliver requested platform ZIP and record final checksums/results
 
 ### Completed since last roadmap update
 - [x] CI cache & checksums.txt generation
@@ -29,22 +42,21 @@
 - [x] Shared clipboard + notification clipboard buttons + `/api/clipboard`
 
 ### Up next (next release)
-- [ ] Decide next version scope: remaining real-device retests (old tablet blank-page, Android 10 EMUI startup, Ubuntu 18.04 compat) + medium-term features
+- [ ] Retest remaining device-specific behavior after the patch release
 - [ ] Old tablet blank-page real-device retest (Chromium < 80 WebView + `?noscript`)
 - [ ] Android 10 EMUI startup retest on device (pick internal public dir like Documents; warning should show but service starts)
 - [ ] Ubuntu 18.04 compat retest on device (wizard skip + picker SnackBar + service start)
 
 ### Medium-term
 - [ ] HTTPS support (self-signed or Let's Encrypt)
-- [ ] Upload progress bar (large file UX)
-- [ ] Batch operations (multi-download as zip, multi-delete)
+- [ ] Refine large-file UX after validating dufs 0.47's existing upload progress table
 - [ ] Share link expiry (auto-invalidate)
-- [ ] Access log (who accessed what)
-- [ ] Per-directory auth (password per folder)
-- [ ] File preview (image/text/video)
+- [ ] Expose the dufs core's per-directory auth rules in the GUI
+- [ ] Extend existing transfer logs into traffic/connection statistics
+- [ ] Additional Linux ARM64 compat build and distribution validation
 
 ### Long-term / Low-priority
-- [ ] WebDAV support
+- [x] WebDAV, directory archives, batch operations and file preview are already provided by the embedded dufs core; GUI configuration and device validation remain separate
 - [ ] Language expansion (Japanese, Korean, etc.)
 - [ ] Share statistics panel (total traffic, connections)
 - [ ] Android desktop widget (quick start/stop)
@@ -59,8 +71,11 @@
 | Issue | Severity | Status |
 |-------|----------|--------|
 | Android 10 scoped storage limits direct-path dir listing | Medium | Workaround: probe non-blocking + warning banner; user should pick internal public dir |
-| AppImage dufs external access | Medium | Resolved via FFI + `/tmp` extraction; needs more distro testing |
-| macOS unsigned, needs manual xattr | Low | Cannot auto-sign |
+| AppImage native-library staging | Medium | Private 0700 copies and ownership cleanup implemented; more distribution/device tests pending |
+| macOS distribution trust | Low | Ad-hoc signed and package-checked; no Developer ID/notarization or real-device validation |
+| Android 16 KB-page devices | Medium | Unverified; preserve recorded API 24/4 KB compatibility constraints pending both device classes |
+| Windows 32-bit x86 GUI | Limitation | Unsupported by current Flutter SDK; released GUI is x64 |
+| iOS file-server runtime | Experimental | Unsigned compile artifact; installation/process execution unverified |
 | `withValues(alpha:)` requires Flutter 3.27+ | Low | Current version OK |
 | NSIS `OutFile` order fragile | Low | Commented, don't touch without CI smoke |
 | Linux tray left-click no signal | Low | Design decision, documented in handoff #10 |

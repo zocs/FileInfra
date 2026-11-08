@@ -1,0 +1,8 @@
+{
+  "name": "fileinfra-browser-tests",
+  "private": true,
+  "devDependencies": {
+    "acorn": "^8.15.0",
+    "puppeteer-core": "^25.16.0"
+  }
+}

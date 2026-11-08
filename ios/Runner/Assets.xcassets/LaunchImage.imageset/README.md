@@ -1,5 +1,5 @@
 # Launch Screen Assets
 
-You can customize the launch screen with your own desired assets by replacing the image files in this directory.
+This directory contains the FileInfra iOS launch-screen image variants referenced by `Contents.json`. Keep each filename and scale entry in sync when replacing assets. The iOS release ZIP is currently an experimental unsigned build; a successful compile does not verify installation or file-server operation.
 
-You can also do it by opening your Flutter project's Xcode project with `open ios/Runner.xcworkspace`, selecting `Runner/Assets.xcassets` in the Project Navigator and dropping in the desired images.
+For an intentional launch-screen change, open `ios/Runner.xcworkspace` in Xcode and edit `Runner/Assets.xcassets`. The existing splash animation/design should be preserved during unrelated bug fixes.

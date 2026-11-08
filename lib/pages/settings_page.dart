@@ -123,7 +123,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 Text(
                   'v$appVersion',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -135,8 +135,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   ).textTheme.bodyMedium?.copyWith(height: 1.5),
                 ),
                 const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: () => launchUrl(
+                TextButton(
+                  onPressed: () => launchUrl(
                     Uri.parse('https://github.com/zocs/fileinfra'),
                     mode: LaunchMode.externalApplication,
                   ),
@@ -150,8 +150,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                Wrap(
+                  alignment: WrapAlignment.center,
                   children: [
                     TextButton.icon(
                       icon: const Icon(Icons.privacy_tip_outlined, size: 16),
@@ -386,7 +386,8 @@ class _SettingsPageState extends State<SettingsPage> {
           // ========== Color Scheme (compact) ==========
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   l10n.t('settings.colorScheme'),
@@ -394,24 +395,72 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
-                const Spacer(),
-                ...presetColors.entries.map((entry) {
-                  final sel = widget.config.colorScheme == entry.key;
-                  return Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: GestureDetector(
-                      onTap: () {
-                        setState(() => widget.config.colorScheme = entry.key);
-                        widget.config.save();
-                        widget.onColorChanged(entry.key);
-                      },
-                      child: Container(
-                        width: sel ? 32 : 28,
-                        height: sel ? 32 : 28,
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ...presetColors.entries.map((entry) {
+                      final sel = widget.config.colorScheme == entry.key;
+                      return _colorOption(
+                        label: l10n.t('settings.color.${entry.key}'),
+                        selected: sel,
+                        onTap: () {
+                          setState(() => widget.config.colorScheme = entry.key);
+                          widget.config.save();
+                          widget.onColorChanged(entry.key);
+                        },
+                        swatch: Container(
+                          width: sel ? 32 : 28,
+                          height: sel ? 32 : 28,
+                          decoration: BoxDecoration(
+                            color: entry.value,
+                            shape: BoxShape.circle,
+                            border: sel
+                                ? Border.all(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
+                                    width: 2,
+                                  )
+                                : null,
+                          ),
+                          child: sel
+                              ? const Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: Colors.white,
+                                )
+                              : null,
+                        ),
+                      );
+                    }),
+                    _colorOption(
+                      label: l10n.t('settings.customColor'),
+                      selected: _isCustomColor,
+                      onTap: _showColorPicker,
+                      swatch: Container(
+                        width: _isCustomColor ? 32 : 28,
+                        height: _isCustomColor ? 32 : 28,
                         decoration: BoxDecoration(
-                          color: entry.value,
+                          color: _isCustomColor
+                              ? Color(widget.config.customColor)
+                              : null,
+                          gradient: _isCustomColor
+                              ? null
+                              : const SweepGradient(
+                                  colors: [
+                                    Color(0xFFFF0000),
+                                    Color(0xFFFFFF00),
+                                    Color(0xFF00FF00),
+                                    Color(0xFF00FFFF),
+                                    Color(0xFF0000FF),
+                                    Color(0xFFFF00FF),
+                                    Color(0xFFFF0000),
+                                  ],
+                                ),
                           shape: BoxShape.circle,
-                          border: sel
+                          border: _isCustomColor
                               ? Border.all(
                                   color: Theme.of(
                                     context,
@@ -420,61 +469,14 @@ class _SettingsPageState extends State<SettingsPage> {
                                 )
                               : null,
                         ),
-                        child: sel
-                            ? const Icon(
-                                Icons.check,
-                                size: 16,
-                                color: Colors.white,
-                              )
-                            : null,
+                        child: Icon(
+                          _isCustomColor ? Icons.check : Icons.palette_outlined,
+                          size: 16,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
-                  );
-                }),
-                // 自定义颜色（色盘）
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: GestureDetector(
-                    onTap: _showColorPicker,
-                    child: Container(
-                      width: _isCustomColor ? 32 : 28,
-                      height: _isCustomColor ? 32 : 28,
-                      decoration: BoxDecoration(
-                        color: _isCustomColor
-                            ? Color(widget.config.customColor)
-                            : null,
-                        gradient: _isCustomColor
-                            ? null
-                            : const SweepGradient(
-                                colors: [
-                                  Color(0xFFFF0000),
-                                  Color(0xFFFFFF00),
-                                  Color(0xFF00FF00),
-                                  Color(0xFF00FFFF),
-                                  Color(0xFF0000FF),
-                                  Color(0xFFFF00FF),
-                                  Color(0xFFFF0000),
-                                ],
-                              ),
-                        shape: BoxShape.circle,
-                        border: _isCustomColor
-                            ? Border.all(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurface,
-                                width: 2,
-                              )
-                            : null,
-                      ),
-                      child: Icon(
-                        _isCustomColor
-                            ? Icons.check
-                            : Icons.palette_outlined,
-                        size: 16,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -524,10 +526,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 // 服务运行中即时重建通知栏按钮（Android 侧持久化并刷新）；
                 // 非 Android / 未运行时 Kotlin 只存 prefs，下次启动生效。
                 try {
-                  await _ch.invokeMethod(
-                    'updateNotificationClipboard',
-                    {'enabled': v},
-                  );
+                  await _ch.invokeMethod('updateNotificationClipboard', {
+                    'enabled': v,
+                  });
                 } catch (_) {}
               },
             ),
@@ -581,48 +582,74 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget _colorOption({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    required Widget swatch,
+  }) {
+    return Semantics(
+      selected: selected,
+      child: SizedBox(
+        width: 48,
+        height: 48,
+        child: IconButton(
+          tooltip: label,
+          onPressed: onTap,
+          padding: EdgeInsets.zero,
+          icon: swatch,
+        ),
+      ),
+    );
+  }
+
   Widget _compactTheme(ThemeMode mode, IconData icon, String label) {
     final sel = widget.themeMode == mode;
     return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          widget.onThemeModeChanged(mode);
-          widget.config.themeMode = mode.name;
-          widget.config.save();
-          setState(() {});
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: sel
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(
-                      context,
-                    ).colorScheme.outline.withValues(alpha: 0.3),
-              width: sel ? 2 : 1,
-            ),
-            color: sel
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
-                : null,
-          ),
-          child: Column(
-            children: [
-              Icon(
-                icon,
-                size: 20,
-                color: sel ? Theme.of(context).colorScheme.primary : null,
+      child: Semantics(
+        selected: sel,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            widget.onThemeModeChanged(mode);
+            widget.config.themeMode = mode.name;
+            widget.config.save();
+            setState(() {});
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: sel
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(
+                        context,
+                      ).colorScheme.outline.withValues(alpha: 0.3),
+                width: sel ? 2 : 1,
               ),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
+              color: sel
+                  ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+                  : null,
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  icon,
+                  size: 20,
                   color: sel ? Theme.of(context).colorScheme.primary : null,
                 ),
-              ),
-            ],
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: sel ? Theme.of(context).colorScheme.primary : null,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -656,10 +683,9 @@ class _SettingsPageState extends State<SettingsPage> {
           Expanded(
             child: Text(
               text,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontSize: 13,
-                height: 1.5,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(fontSize: 13, height: 1.5),
             ),
           ),
         ],

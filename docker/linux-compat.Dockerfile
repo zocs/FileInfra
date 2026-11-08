@@ -5,6 +5,8 @@
 # 唯一需要外部升级的是 cmake（18.04 自带 3.10，Flutter 3.47 需 ≥ 3.14）。
 
 FROM ubuntu:18.04
+ARG FLUTTER_VERSION=3.47.0
+ARG RUST_VERSION=1.99.1
 
 # 基础工具
 # 双编译器策略：
@@ -14,7 +16,7 @@ FROM ubuntu:18.04
 #    否则 CMake 报「Could not find compiler set in environment variable CXX: clang++」。
 RUN apt-get update && \
     apt-get install -y \
-      curl git xz-utils unzip \
+      curl git xz-utils unzip python3 \
       ninja-build pkg-config \
       clang-10 \
       libgtk-3-dev libsecret-1-dev \
@@ -37,17 +39,17 @@ RUN curl -sL -o /tmp/cmake.tar.gz \
     rm /tmp/cmake.tar.gz
 ENV PATH="/opt/cmake-3.28.6-linux-x86_64/bin:${PATH}"
 
-# Flutter 3.47.0
+# Passed from the same pinned toolchain versions as the native CI jobs.
 RUN curl -sL -o /tmp/flutter.tar.xz \
-      'https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.0-stable.tar.xz' && \
+      "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" && \
     tar xf /tmp/flutter.tar.xz -C /opt/ && \
     rm /tmp/flutter.tar.xz && \
     git config --global --add safe.directory /opt/flutter
 ENV PATH="/opt/flutter/bin:${PATH}"
 
-# Rust 1.98（与 CI 主构建对齐）
+# Rust version is fixed, including patch level.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.98.0 --profile minimal --no-modify-path
+    sh -s -- -y --default-toolchain "${RUST_VERSION}" --profile minimal --no-modify-path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # 预 cache flutter linux 引擎（避免构建时下载）

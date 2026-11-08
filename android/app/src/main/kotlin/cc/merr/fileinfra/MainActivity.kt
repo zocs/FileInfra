@@ -2,6 +2,7 @@ package cc.merr.fileinfra
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -22,8 +23,54 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "cc.merr.fileinfra/native"
     private val STORAGE_PERMISSION_CODE = 1001
     private val NOTIFY_PERMISSION_CODE = 1002
+    private var nativeChannel: MethodChannel? = null
+    private var clipboardRequestConsumed = false
+    private val stoppedListener: (Int) -> Unit = { generation ->
+        nativeChannel?.invokeMethod("serviceStopped", mapOf("generation" to generation))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        clipboardRequestConsumed = false
+        if (hasWindowFocus()) sendClipboardWhenFocused()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) sendClipboardWhenFocused()
+    }
+
+    private fun sendClipboardWhenFocused() {
+        val request = intent ?: return
+        if (request.action != DufsForegroundService.ACTION_SEND_CLIPBOARD) return
+        // Consume before reading/network dispatch, so focus changes and activity
+        // recreation never send the same notification request twice.
+        request.action = null
+        clipboardRequestConsumed = true
+        val generation = request.getIntExtra("generation", -1)
+        val token = request.getStringExtra("clipboardRequestToken")
+        request.removeExtra("generation")
+        request.removeExtra("clipboardRequestToken")
+        if (!DufsForegroundService.isAuthorizedClipboardSend(generation, token)) return
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = cm.primaryClip ?: return
+        if (clip.itemCount == 0) return
+        val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
+        if (text.isEmpty()) return
+        startService(Intent(this, DufsForegroundService::class.java)
+            .setAction(DufsForegroundService.ACTION_SEND_CLIPBOARD)
+            .putExtra("generation", generation).putExtra("text", text))
+    }
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        if (savedInstanceState?.getBoolean("clipboardRequestConsumed", false) == true &&
+            intent?.action == DufsForegroundService.ACTION_SEND_CLIPBOARD) {
+            intent.action = null
+            intent.removeExtra("generation")
+            intent.removeExtra("clipboardRequestToken")
+            clipboardRequestConsumed = true
+        }
         super.onCreate(savedInstanceState)
         // API 33+ 的通知运行权限要在前台服务常驻通知显示前拿到。
         // 只挂在 requestStorage 通道上不够：存量用户存储权限早已授予，
@@ -41,9 +88,16 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: android.os.Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("clipboardRequestConsumed", clipboardRequestConsumed)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        nativeChannel = channel
+        DufsForegroundService.stoppedListener = stoppedListener
 
         channel.setMethodCallHandler { call, result ->
             // 顶层兜底：handler 抛出的任何异常以 result.error 回到 Dart，
@@ -56,6 +110,18 @@ class MainActivity : FlutterActivity() {
                 result.error("native_error", "${e.javaClass.simpleName}: ${e.message}", null)
             }
         }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (DufsForegroundService.stoppedListener === stoppedListener) {
+            DufsForegroundService.stoppedListener = null
+            // The tools HTTP listener belongs to this engine, not the native
+            // foreground service that can remain alive after task removal.
+            DufsForegroundService.updateAddress(this, DufsForegroundService.currentAddress, "")
+        }
+        nativeChannel?.setMethodCallHandler(null)
+        nativeChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun handleMethodCall(call: io.flutter.plugin.common.MethodCall, result: io.flutter.plugin.common.MethodChannel.Result) {
@@ -119,6 +185,7 @@ class MainActivity : FlutterActivity() {
                     intent.putExtra("args", args)
                     intent.putExtra("lang", lang)
                     intent.putExtra("address", address)
+                    intent.putExtra("notifClipboard", call.argument<Boolean>("notifClipboard") ?: true)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(intent)
                     } else {
@@ -130,7 +197,7 @@ class MainActivity : FlutterActivity() {
                 "updateNotificationAddress" -> {
                     val address = call.argument<String>("address") ?: ""
                     val clipboardAddress = call.argument<String>("clipboardAddress") ?: ""
-                    DufsForegroundService.updateAddress(this, address, clipboardAddress)
+                    DufsForegroundService.updateAddress(this, address, clipboardAddress, call.argument<Int>("generation"))
                     result.success(true)
                 }
                 "updateNotificationClipboard" -> {
@@ -139,8 +206,7 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "stopForegroundService" -> {
-                    val intent = Intent(this, DufsForegroundService::class.java)
-                    stopService(intent)
+                    DufsForegroundService.requestStop(this, call.argument<Int>("generation"))
                     Log.d("fileinfra", "Foreground service stop requested")
                     result.success(true)
                 }
@@ -165,6 +231,9 @@ class MainActivity : FlutterActivity() {
                         "isRunning" to DufsForegroundService.isRunning,
                         "port" to DufsForegroundService.currentPort,
                         "path" to DufsForegroundService.currentPath,
+                        "address" to DufsForegroundService.currentAddress,
+                        "clipboardAddress" to DufsForegroundService.currentClipboardAddress,
+                        "generation" to DufsForegroundService.startGeneration,
                         "error" to (DufsForegroundService.lastError ?: "")
                     )
                     result.success(info)

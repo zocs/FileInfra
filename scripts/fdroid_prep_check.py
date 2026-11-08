@@ -117,9 +117,26 @@ def check_recipe(recipe: dict) -> None:
             )
             continue
         ok(f"Build {label} commit {commit[:9]} 存在")
-        rc, _ = sh("git", "merge-base", "--is-ancestor", commit, "origin/main")
-        if rc != 0:
-            fail(f"Build {label} 的 commit 不在 origin/main 上（builder 默认分支拉不到）")
+        rc, refs = sh("git", "for-each-ref", f"--contains={commit}",
+                      "--format=%(refname)", "refs/remotes/origin/")
+        if rc != 0 or not refs:
+            fail(f"Build {label} 的 commit 不在 origin 的已发布分支上（builder 拉不到）")
+        rc, source = sh("git", "show", f"{commit}:android/app/build.gradle.kts")
+        if rc != 0 or "FILEINFRA_UNSIGNED_RELEASE" not in source:
+            fail(f"Build {label} 的固定源码不支持 FILEINFRA_UNSIGNED_RELEASE；仅修改配方不够")
+        rc, pinned_pubspec = sh("git", "show", f"{commit}:pubspec.yaml")
+        pinned_version = re.search(
+            r"^version:\s*(\d[\w.\-]*)\+(\d+)", pinned_pubspec, re.M
+        ) if rc == 0 else None
+        if not pinned_version:
+            fail(f"Build {label} 的固定源码版本无法从 pubspec.yaml 读取")
+        elif (pinned_version.group(1), int(pinned_version.group(2))) != (str(vn), vc):
+            fail(
+                f"Build {label} 的固定源码版本为 "
+                f"{pinned_version.group(1)}+{pinned_version.group(2)}，与配方不一致"
+            )
+        else:
+            ok(f"Build {label} 固定源码版本一致")
 
     codes = [int(b["versionCode"]) for b in builds if b.get("versionCode")]
     if codes != sorted(codes):
@@ -151,13 +168,14 @@ def check_recipe(recipe: dict) -> None:
         else:
             ok(f"版本三元组一致：{name}+{code}")
 
-        # flutter build 的 --build-name/--build-number 必须和 versionName/Code 相同，
-        # 否则 F-Droid 校验 APK 里的版本时会判定配方与产物不符。
+        # Flutter 默认读取 pubspec 的版本。只有显式覆盖时才检查覆盖值。
         build_cmds = "\n".join(latest.get("build") or [])
         m = re.search(r"--build-name=([\w.\-]+)", build_cmds)
         n = re.search(r"--build-number=(\d+)", build_cmds)
-        if not m or not n:
-            fail("build: 里找不到 --build-name/--build-number")
+        if not m and not n:
+            ok("Flutter 从 pubspec.yaml 读取版本")
+        elif not m or not n:
+            fail("显式覆盖版本时必须同时指定 --build-name/--build-number")
         elif m.group(1) != name or int(n.group(1)) != code:
             fail(
                 f"--build-name={m.group(1)} --build-number={n.group(1)} "
@@ -166,11 +184,46 @@ def check_recipe(recipe: dict) -> None:
         else:
             ok("--build-name/--build-number 与 pubspec 一致")
 
-    key = str(recipe.get("AllowedAPKSigningKeys", ""))
-    if re.fullmatch(r"[0-9a-f]{64}", key):
-        ok("AllowedAPKSigningKeys 是 64 位 sha256")
+    build_cmds = "\n".join(latest.get("build") or [])
+    if not re.search(r"\bFILEINFRA_UNSIGNED_RELEASE=1\b", build_cmds):
+        fail("build: 必须显式设置 FILEINFRA_UNSIGNED_RELEASE=1 供 F-Droid 签名")
     else:
-        fail(f"AllowedAPKSigningKeys 不是 64 位 sha256：{key!r}")
+        ok("F-Droid 构建显式禁用开发者签名")
+
+    keys = recipe.get("AllowedAPKSigningKeys")
+    if keys:
+        if not recipe.get("Binaries"):
+            fail("AllowedAPKSigningKeys 需要 Binaries 上游 APK 配合可复现构建；公钥不能代替签名私钥")
+        if not isinstance(keys, list):
+            keys = [keys]
+        if all(re.fullmatch(r"[0-9a-fA-F]{64}", str(key)) for key in keys):
+            ok("AllowedAPKSigningKeys 格式正确")
+        else:
+            fail("AllowedAPKSigningKeys 必须是 sha256 指纹或其列表")
+    else:
+        ok("使用 F-Droid 默认签名（与开发者 APK 不同）")
+
+    data = str(recipe.get("UpdateCheckData", "")).split("|")
+    if len(data) != 4:
+        fail("UpdateCheckData 必须明确指定 pubspec.yaml 的版本名/版本号提取规则")
+    elif pv:
+        code_file, code_pattern, name_file, name_pattern = data
+        if name_file == ".":
+            name_file = code_file
+        try:
+            code_match = re.search(code_pattern, read(ROOT / code_file), re.M)
+            name_match = re.search(name_pattern, read(ROOT / name_file), re.M)
+            extracted = (
+                name_match.group(1) if name_match else None,
+                int(code_match.group(1)) if code_match else None,
+            )
+        except (re.error, IndexError, ValueError) as e:
+            fail(f"UpdateCheckData 提取失败：{e}")
+        else:
+            if extracted != pv:
+                fail(f"UpdateCheckData 提取 {extracted} ≠ pubspec {pv}")
+            else:
+                ok("UpdateCheckData 正确提取 pubspec 版本")
 
     if recipe.get("AutoUpdateMode") != "Version":
         warn(f"AutoUpdateMode={recipe.get('AutoUpdateMode')}（建议 Version）")
@@ -213,6 +266,15 @@ def check_drift(recipe: dict) -> None:
         ok(f"NDK 对齐：{ndk_rec}")
 
     prebuild = "\n".join(latest.get("prebuild") or [])
+    rust_ci = env_from_workflow("RUST_VERSION")
+    rust_recipe = re.search(r"--default-toolchain\s+([\d.]+)", prebuild)
+    if not rust_ci:
+        fail("CI 必须显式固定 RUST_VERSION")
+    elif not rust_recipe or rust_recipe.group(1) != rust_ci:
+        fail(f"Rust 配方版本与 CI RUST_VERSION={rust_ci} 不一致")
+    else:
+        ok(f"Rust 版本对齐：{rust_ci}")
+
     missing = [
         abi
         for abi in ("android-arm64", "android-arm", "android-x86_64")

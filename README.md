@@ -15,7 +15,7 @@
 [![Linux](https://img.shields.io/badge/Linux-green)](https://github.com/zocs/fileinfra/releases)
 [![macOS](https://img.shields.io/badge/macOS-yellow)](https://github.com/zocs/fileinfra/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/zocs/fileinfra/build.yml?label=build)](https://github.com/zocs/fileinfra/actions)
-[![F-Droid](https://img.shields.io/badge/F-Droid-pending-blue)](https://gitlab.com/fdroid/fdroiddata)
+[![F-Droid](https://img.shields.io/badge/F-Droid-preparation-grey)](./.fdroid.yml)
 
 [中文文档](./README_zh.md) · [Privacy Policy](./PRIVACY.md) · [📥 Releases](https://github.com/zocs/fileinfra/releases)
 
@@ -45,11 +45,11 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 | 🔗 **Just open a link** | QR code or URL — that's all the other side needs |
 | 📋 **Shared clipboard & tools page** | Sync text with browsers on the LAN and generate QR codes offline |
 | 📲 **Android quick controls** | Control the running server from the notification or Quick Settings tile |
-| 🔐 **Secure** | Optional password auth, CORS control |
+| 🔐 **File access controls** | Optional password auth and configurable permissions |
 | 🔀 **Fine-grained permissions** | Upload, delete, search, archive download — toggle each one |
 | 🎨 **Customizable** | 6 color schemes + custom color wheel + dark / light mode |
 | 🌐 **Multilingual** | 简体中文 · 繁體中文 · English |
-| 📦 **Zero setup** | Self-contained — no external dependencies |
+| 📦 **Bundled file server** | No separate dufs installation; Linux needs desktop runtime libraries |
 
 ---
 
@@ -72,15 +72,18 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 
 | Platform | File | |
 |:---|:---|:---:|
-| 🪟 **Windows** | `fileinfra-*-windows-x64-setup.exe` (installer) or `.zip` (portable) | ✅ Tested |
-| 🤖 **Android** | `fileinfra-*-android-universal.apk` (arm64-v8a · armeabi-v7a · x86_64) | ✅ Tested |
-| 🐧 **Linux x64** | `.AppImage` (zero deps) or `.deb` | ✅ Tested |
-| 🐧 **Linux ARM64** | `.AppImage` or `.deb` (Kylin/UOS compatible) | ✅ Tested |
-| 🍎 **macOS** | `FileInfra-*-macos-arm64.zip` | ⚠️ Untested |
+| 🪟 **Windows x64** | `fileinfra-*-windows-x64-setup.exe` (installer) or `.zip` (portable) | Windows 10+; bundled VC++ runtime |
+| 🤖 **Android** | `fileinfra-*-android-universal.apk` or `-android-arm64.apk`, `-android-armv7.apk`, `-android-x86_64.apk` | Android 7.0+ (API 24) |
+| 🐧 **Linux x64** | `.AppImage`, `.deb`, or `.tar.gz`; choose `-compat` for older distributions | Desktop runtime libraries required |
+| 🐧 **Linux ARM64** | `.AppImage`, `.deb`, or `.tar.gz` | Distribution/device validation varies |
+| 🍎 **macOS (Apple Silicon)** | `FileInfra-*-macos-arm64.zip` | macOS 13+; device testing pending |
+| 🍎 **macOS (Intel)** | `FileInfra-*-macos-x64.zip` | macOS 13+; device testing pending |
 
 > 📥 [Download latest release](https://github.com/zocs/fileinfra/releases)
 >
-> 🤖 Also available on [F-Droid](https://f-droid.org/) (pending review)
+> F-Droid metadata and an unsigned build path are prepared. Submission is postponed; FileInfra is not currently available in the F-Droid catalog.
+
+Windows packages contain the x64 GUI. The current Flutter SDK has no Windows 32-bit x86 target. Linux packages declare their actual glibc/libstdc++ requirements in the `.deb`; the x64 compat build targets glibc 2.27+ and libstdc++ 5.1+. AppImage does not remove these system requirements. Kylin/UOS compatibility depends on the distribution version and desktop libraries. macOS packages use ad-hoc signatures and are not notarized or signed with a Developer ID. iOS ZIPs are experimental unsigned build artifacts; installation and file-server operation have not been verified.
 
 ### Steps
 
@@ -89,7 +92,7 @@ A Dufs-based, lightweight cross-platform file distribution GUI optimized for **a
 3. Scan QR code or enter URL in browser (port required)
 4. Share files — done!
 
-While the server is running, open the separate **Tools** URL in the app to use the LAN clipboard and offline QR generator. The clipboard endpoint uses the file-server port + 2000 (for example, file server `5000` → tools `7000`; it may move up if that port is unavailable). On Android, notification actions can send the device clipboard to the shared page or pull shared text back to the device; a Quick Settings tile can start or stop the last configured share.
+While the server is running, open the separate **Tools** URL in the app to use the LAN clipboard and offline QR generator. The clipboard endpoint starts at the file-server port + 2000 (for example, file server `5000` → tools `7000`; it may move if that port is unavailable or unsafe for browsers). On Android, **Send clipboard** opens and focuses FileInfra before reading the device clipboard once; **Pull clipboard** writes shared text to the device. A Quick Settings tile can start or stop the last successfully started share, using its saved settings. A tile start runs the native file server; open FileInfra to restore its tools listener.
 
 > Clipboard content is shared with anyone who can reach the tools URL on your network. Do not put passwords, tokens, or other sensitive information on it.
 
@@ -105,24 +108,24 @@ While the server is running, open the separate **Tools** URL in the app to use t
 | 📱 **Phone hotspot** | One device creates a hotspot, others join — no router needed |
 | 🌍 **Remote access** | Works with ZeroTier, Tailscale, EasyTier, or any VPN |
 
-> 🔒 **All transfers happen directly between your devices. No data passes through third-party servers.**
+> All transfers happen directly between your devices. FileInfra does not send files or clipboard text to third-party services. The app currently serves HTTP, so file and clipboard contents are unencrypted unless your network/VPN supplies encryption.
 
 ---
 
 ## 🔒 Security
 
-> ⚠️ The file server and tools page are reachable on the network interfaces they bind to (the file server listens on `0.0.0.0` by default).
+> ⚠️ Both the file server and tools page listen on all IPv4 interfaces (`0.0.0.0`), including Wi-Fi, hotspot and VPN interfaces. The app does not currently provide a setting to restrict the bind address.
 
 | Network | Recommendation |
 |:---|:---:|
-| Home WiFi | ✅ Safe — LAN only |
-| Public WiFi | ⚠️ Enable password auth |
+| Home WiFi | Use only with peers you trust |
+| Public WiFi | Use a trusted VPN; file passwords do not protect the tools page |
 | Corporate network | ⚠️ Watch firewall policies |
 | Public internet | ❌ Not recommended — use VPN instead |
 
 **Best practices:**
 1. Enable password authentication on untrusted networks; configure upload/delete permissions conservatively.
-2. Remember that file-server authentication does not protect the separate clipboard/tools page.
+2. File-server authentication does not protect the separate clipboard/tools page. Its browser Origin checks prevent unrelated websites from using the API, but do not authenticate devices or native clients.
 3. Stop the server when done and review access logs periodically.
 
 ---
@@ -137,7 +140,7 @@ While the server is running, open the separate **Tools** URL in the app to use t
 
 ### Android — Notification Clipboard Buttons
 
-The notification's "Send clipboard" button reads the system clipboard, which is **only readable by the foreground app on Android 10+** (background reads silently return empty). If the Tools page doesn't update after tapping "Send", bring FileInfra to the foreground and retry. "Pull clipboard" (writing to the system clipboard) is not affected (Android 10+ shows a clipboard-access toast).
+The notification's **Send clipboard** action opens FileInfra and waits for window focus before reading the system clipboard. This supports Android 10+ foreground clipboard restrictions. Unlock the device if needed. **Pull clipboard** writes shared text and does not need a background read. Clipboard controls can be disabled in settings; after a tile-only start, open the app to initialize the tools page.
 
 ### Port in Use
 
@@ -155,13 +158,15 @@ chmod +x fileinfra-*.AppImage
 ./fileinfra-*.AppImage
 ```
 
+Install the FUSE runtime required by your distribution, or use the AppImage's `--appimage-extract-and-run` option. If the error mentions `GLIBC_*` or `GLIBCXX_*`, use the x64 compat package or a newer distribution; installing FUSE cannot fix an incompatible system C library.
+
 ### macOS — Developer Verification Blocked
 
 **Symptom:** "Can't verify developer" on open
 
 **Fix:**
 ```bash
-xattr -d com.apple.quarantine FileInfra.app
+xattr -cr FileInfra.app
 ```
 
 ### Windows — Firewall Blocking
@@ -184,7 +189,7 @@ A: Yes. Choose a single file and FileInfra will expose just that file through th
 A: LAN by default. For remote access, use ZeroTier / Tailscale / EasyTier.
 
 **Q: Is HTTPS supported?**
-A: Not yet. Planned for a future release.
+A: The dufs command-line server supports TLS. FileInfra's file server and tools page currently use HTTP and have no HTTPS setting.
 
 **Q: Max file size?**
 A: No hard limit. Tested with a single 70GB+ archive over gigabit LAN — sustained full bandwidth throughout. Large downloads may have a brief delay while loading file info, which is normal. Actual speed depends on filesystem, disk I/O, and Wi-Fi throughput.
@@ -202,8 +207,9 @@ A: No! Everything stays local. Transfers are device-to-device.
 ### Requirements
 
 - Flutter SDK 3.47.0 (the CI build version)
+- Rust 1.99.1 (pinned in CI and F-Droid preparation)
 - Windows: VS Build Tools 2022 (C++ workload)
-- Android: Android SDK, NDK
+- Android: JDK 17, Android SDK and NDK (CI expects r29)
 - Linux: clang, lld, llvm, libgtk-3-dev
 - macOS: Xcode
 
@@ -219,9 +225,16 @@ flutter run -d windows
 flutter run -d android
 
 # Build
+bash scripts/build_dufs.sh windows-x86_64
 flutter build windows --release
+# Android: build all native ABIs before building a universal APK.
+bash scripts/build_dufs.sh android-arm64
+bash scripts/build_dufs.sh android-arm
+bash scripts/build_dufs.sh android-x86_64
 flutter build apk --release
 ```
+
+Android release builds require the existing signing key via `KEYSTORE_FILE`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, and `KEY_PASSWORD`. The historical key alias defaults to `inout`; it is a keystore identifier, not the application name. For an intentionally unsigned local/F-Droid preparation build, set `FILEINFRA_UNSIGNED_RELEASE=1`. GitHub release APKs are checked against the existing signing certificate.
 
 ### Packaging Scripts
 
@@ -230,8 +243,9 @@ flutter build apk --release
 bash scripts/build_linux.sh x86_64
 bash scripts/build_linux.sh aarch64
 
-# macOS (ARM64)
+# macOS (Apple Silicon arm64 or Intel x64)
 bash scripts/build_macos.sh aarch64
+bash scripts/build_macos.sh x86_64
 ```
 
 Output: AppImage, deb, rpm, tar.gz (Linux) and zip (macOS).
@@ -255,7 +269,7 @@ Notes:
 
 ### CI/CD
 
-GitHub Actions builds all platforms on tag push (`v*`) and creates a release automatically.
+GitHub Actions runs analysis, Flutter/browser regressions, native Android tests, packaging checks and builds on manual dispatch or a tag push. Release tags (`v*`) publish only after all required jobs pass. Verify the branch first with `gh workflow run build.yml --ref <branch> -f note="<purpose>"`; release downloads include SHA-256 checksums. See [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) for the complete sequence.
 
 ### Project Structure
 
@@ -277,9 +291,10 @@ lib/
 │   └── color_picker_dialog.dart    # Hand-rolled HSV color wheel (no deps)
 └── services/
     ├── dufs_service.dart           # dufs lifecycle (platform dispatch)
+    ├── clipboard_service.dart      # LAN clipboard, tools page and QR endpoints
     └── dufs_ffi.dart               # FFI bindings (desktop)
 scripts/
-├── build_dufs.sh                   # Cross-compile dufs (7 platforms)
+├── build_dufs.sh                   # Compile pinned fork source for each target/ABI
 ├── build_linux.sh                  # Linux packaging (AppImage/deb)
 ├── build_macos.sh                  # macOS packaging
 └── dufs-ffi/lib.rs                 # Rust FFI wrapper

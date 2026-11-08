@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:qr/qr.dart';
 
 /// 剪贴板旁路服务：同一端口同时提供 HTTP 页面 + WebSocket 实时同步。
 ///
-/// 默认端口 = dufs 端口 + 1000（差值固定），dufs 因自动+1 变化时剪贴板也
+/// 默认端口 = dufs 端口 + [portOffset]，dufs 因自动+1 变化时剪贴板也
 /// 跟随+1；若自身端口被占用，独立再+1 最多 [maxBump] 步。
 /// 零第三方依赖，纯 dart:io 实现。
 class ClipboardService {
@@ -35,10 +36,10 @@ class ClipboardService {
   /// 展示用 URL（host 由 UI 从主服务地址复用）。
   String? get url => _server != null ? 'http://<host>:${_server!.port}' : null;
 
-  /// 启动服务，剪贴板端口 = [dufsPort] + 1000。
+  /// 启动服务，剪贴板端口 = [dufsPort] + [portOffset]。
   /// 若端口被占用或落在浏览器不安全端口黑名单（如 6000 = X11），自动+1
   /// 最多 [maxBump] 步；全部不可用则 log warning 跳过。
-  /// 失败时只 log warning，不抛异常（剪贴板是增量功能，不阻塞主服务）。
+  /// 端口不可用时降级跳过；其他绑定错误会记录后抛出。
   Future<void> start(int dufsPort) async {
     lastError = null;
     int base = dufsPort + portOffset;
@@ -54,9 +55,12 @@ class ClipboardService {
         _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
         _running = true;
         debugPrint('ClipboardService: bound on port $port (dufs $dufsPort)');
-        _server!.listen(_handleRequest, onError: (e) {
-          debugPrint('ClipboardService: server error: $e');
-        });
+        _server!.listen(
+          _handleRequest,
+          onError: (e) {
+            debugPrint('ClipboardService: server error: $e');
+          },
+        );
         return;
       } on SocketException catch (e) {
         lastError = 'Port $port busy: $e';
@@ -72,12 +76,86 @@ class ClipboardService {
 
   /// 浏览器不安全端口黑名单（Chrome/Firefox 共同禁用，含 X11 6000 等）。
   static const Set<int> _unsafeBrowserPorts = {
-    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69,
-    77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117,
-    119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514,
-    515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989,
-    990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000,
-    6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080,
+    1,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    20,
+    21,
+    22,
+    23,
+    25,
+    37,
+    42,
+    43,
+    53,
+    69,
+    77,
+    79,
+    87,
+    95,
+    101,
+    102,
+    103,
+    104,
+    109,
+    110,
+    111,
+    113,
+    115,
+    117,
+    119,
+    123,
+    135,
+    137,
+    139,
+    143,
+    161,
+    179,
+    389,
+    427,
+    465,
+    512,
+    513,
+    514,
+    515,
+    526,
+    530,
+    531,
+    532,
+    540,
+    548,
+    554,
+    556,
+    563,
+    587,
+    601,
+    636,
+    989,
+    990,
+    993,
+    995,
+    1719,
+    1720,
+    1723,
+    2049,
+    3659,
+    4045,
+    5060,
+    5061,
+    6000,
+    6566,
+    6665,
+    6666,
+    6667,
+    6668,
+    6669,
+    6697,
+    10080,
   };
 
   static int _min(int a, int b) => a < b ? a : b;
@@ -85,31 +163,33 @@ class ClipboardService {
   /// 停止服务，关闭所有连接。
   Future<void> stop() async {
     _running = false;
-    for (final c in _clients) {
+    final server = _server;
+    _server = null;
+    final clients = _clients.toList();
+    _clients.clear();
+    _text = null;
+    _updatedAt = 0;
+    for (final c in clients) {
       try {
         await c.close();
       } catch (_) {}
     }
-    _clients.clear();
     try {
-      await _server?.close(force: true);
+      await server?.close(force: true);
     } catch (_) {}
-    _server = null;
-    _text = null;
-    _updatedAt = 0;
     debugPrint('ClipboardService: stopped');
   }
 
   /// 当前共享文本（供 Android 原生侧拉取剪贴板用）。
   String? get text => _text;
 
-  /// 设置剪贴板内容并广播给所有其他客户端（排除发送者自身）。
-  void setText(String text, {WebSocket? source}) {
+  /// 设置剪贴板内容并广播给所有客户端，包括发送者的确认消息。
+  void setText(String text) {
     _text = text;
     _updatedAt = DateTime.now().millisecondsSinceEpoch;
     final msg = _buildClipboardMsg();
     for (final c in _clients) {
-      if (c.readyState == WebSocket.open && c != source) {
+      if (c.readyState == WebSocket.open) {
         c.add(msg);
       }
     }
@@ -118,6 +198,18 @@ class ClipboardService {
   // ── 请求分发 ──
 
   void _handleRequest(HttpRequest req) {
+    if (!_running) {
+      _reply(req, HttpStatus.serviceUnavailable, 'service stopped');
+      return;
+    }
+    // Native notification clients omit Origin. Browser writes and WebSocket
+    // handshakes must originate from this tools page, including its port.
+    if ((WebSocketTransformer.isUpgradeRequest(req) ||
+            req.uri.path == '/api/clipboard') &&
+        !_hasAllowedOrigin(req)) {
+      _reply(req, HttpStatus.forbidden, 'origin not allowed');
+      return;
+    }
     if (WebSocketTransformer.isUpgradeRequest(req)) {
       _upgradeToWs(req);
     } else if (req.uri.path == '/api/clipboard') {
@@ -129,9 +221,38 @@ class ClipboardService {
     }
   }
 
+  bool _hasAllowedOrigin(HttpRequest req) {
+    final origins = req.headers['origin'];
+    if (origins == null) return true;
+    if (origins.length != 1) return false;
+    final origin = Uri.tryParse(origins.single);
+    final target = req.requestedUri;
+    return origin != null &&
+        origin.scheme == target.scheme &&
+        origin.host == target.host &&
+        origin.port == target.port &&
+        origin.userInfo.isEmpty &&
+        origin.path.isEmpty &&
+        !origin.hasQuery &&
+        !origin.hasFragment;
+  }
+
+  Future<void> _reply(HttpRequest req, int status, String body) async {
+    try {
+      req.response
+        ..statusCode = status
+        ..headers.contentType = ContentType.text
+        ..write(body);
+      await req.response.close();
+    } catch (_) {
+      // The server or client may have closed during an in-flight request.
+    }
+  }
+
   // ── WebSocket ──
 
   Future<void> _upgradeToWs(HttpRequest req) async {
+    final server = _server;
     WebSocket? ws;
     try {
       ws = await WebSocketTransformer.upgrade(req);
@@ -139,27 +260,38 @@ class ClipboardService {
       debugPrint('ClipboardService: WS upgrade failed: $e');
       return;
     }
-    _clients.add(ws);
-    debugPrint('ClipboardService: WS client connected (total=${_clients.length})');
-
-    // 连接后立即推送当前内容
-    if (_text != null) {
-      ws.add(_buildClipboardMsg());
+    if (!_running || !identical(server, _server)) {
+      await ws.close(WebSocketStatus.goingAway);
+      return;
     }
+    _clients.add(ws);
+    debugPrint(
+      'ClipboardService: WS client connected (total=${_clients.length})',
+    );
+
+    // 每次连接都发送快照，包括重启后的空值，清掉页面里的旧会话内容。
+    ws.add(_buildClipboardMsg());
 
     ws.listen(
       (data) {
         // 二进制帧时 data 是 List<int>，仅处理文本帧，避免强转抛 TypeError
         if (data is String) {
+          if (data.length > maxClipboardBodyBytes ||
+              utf8.encode(data).length > maxClipboardBodyBytes) {
+            ws!.close(WebSocketStatus.messageTooBig, 'message too large');
+            return;
+          }
           final msg = _parseClientMsg(data);
           if (msg != null) {
-            setText(msg, source: ws);
+            setText(msg);
           }
         }
       },
       onDone: () {
         _clients.remove(ws);
-        debugPrint('ClipboardService: WS client disconnected (remaining=${_clients.length})');
+        debugPrint(
+          'ClipboardService: WS client disconnected (remaining=${_clients.length})',
+        );
       },
       onError: (e) {
         _clients.remove(ws);
@@ -173,9 +305,7 @@ class ClipboardService {
   void _serveHtml(HttpRequest req) {
     req.response
       ..statusCode = HttpStatus.ok
-      ..headers.contentType = ContentType(
-        'text', 'html', charset: 'utf-8',
-      )
+      ..headers.contentType = ContentType('text', 'html', charset: 'utf-8')
       ..write(_htmlPage())
       ..close();
   }
@@ -189,7 +319,7 @@ class ClipboardService {
   /// 撑爆内存；剪贴板场景正常内容远小于该值）。
   static const int maxClipboardBodyBytes = 1024 * 1024;
 
-  void _serveClipboardApi(HttpRequest req) {
+  Future<void> _serveClipboardApi(HttpRequest req) async {
     if (req.method == 'GET') {
       req.response
         ..statusCode = HttpStatus.ok
@@ -197,53 +327,43 @@ class ClipboardService {
         ..write(jsonEncode({'text': _text ?? '', 'ts': _updatedAt}))
         ..close();
     } else if (req.method == 'POST') {
+      final server = _server;
       // Content-Length 已知且超限时直接拒绝，不等 body 读完。
       final contentLength = req.contentLength;
       if (contentLength > maxClipboardBodyBytes) {
-        req.response
-          ..statusCode = HttpStatus.requestEntityTooLarge
-          ..headers.contentType = ContentType.text
-          ..write('body too large')
-          ..close();
+        await _reply(req, HttpStatus.requestEntityTooLarge, 'body too large');
         return;
       }
-      req.cast<List<int>>().transform(utf8.decoder).join().then((body) {
-        // 流式读取时按解码后长度再拦一次（Content-Length 可能缺失）。
-        if (body.length > maxClipboardBodyBytes) {
-          req.response
-            ..statusCode = HttpStatus.requestEntityTooLarge
-            ..headers.contentType = ContentType.text
-            ..write('body too large')
-            ..close();
-          return;
+      try {
+        final bytes = BytesBuilder(copy: false);
+        await for (final chunk in req) {
+          if (bytes.length + chunk.length > maxClipboardBodyBytes) {
+            await _reply(
+              req,
+              HttpStatus.requestEntityTooLarge,
+              'body too large',
+            );
+            return;
+          }
+          bytes.add(chunk);
         }
+        final body = utf8.decode(bytes.takeBytes());
         if (body.isEmpty) {
-          req.response
-            ..statusCode = HttpStatus.badRequest
-            ..headers.contentType = ContentType.text
-            ..write('empty body')
-            ..close();
+          await _reply(req, HttpStatus.badRequest, 'empty body');
           return;
         }
-        try {
-          setText(body);
-          req.response
-            ..statusCode = HttpStatus.ok
-            ..headers.contentType = ContentType.text
-            ..write('ok')
-            ..close();
-        } catch (e) {
-          // 广播给 WebSocket 客户端时若连接异常，确保响应仍被关闭，不泄漏。
-          debugPrint('ClipboardService: setText failed: $e');
-          try {
-            req.response
-              ..statusCode = HttpStatus.internalServerError
-              ..headers.contentType = ContentType.text
-              ..write('internal error')
-              ..close();
-          } catch (_) {}
+        if (!_running || !identical(server, _server)) {
+          await _reply(req, HttpStatus.serviceUnavailable, 'service stopped');
+          return;
         }
-      });
+        setText(body);
+        await _reply(req, HttpStatus.ok, 'ok');
+      } on FormatException {
+        await _reply(req, HttpStatus.badRequest, 'invalid UTF-8');
+      } catch (e) {
+        debugPrint('ClipboardService: clipboard POST failed: $e');
+        await _reply(req, HttpStatus.badRequest, 'invalid request body');
+      }
     } else {
       req.response
         ..statusCode = HttpStatus.methodNotAllowed
@@ -284,7 +404,11 @@ class ClipboardService {
       final svg = _qrSvg(text, style: style, fg: fg, bg: bg);
       req.response
         ..statusCode = HttpStatus.ok
-        ..headers.contentType = ContentType('image', 'svg+xml', charset: 'utf-8')
+        ..headers.contentType = ContentType(
+          'image',
+          'svg+xml',
+          charset: 'utf-8',
+        )
         ..write(svg)
         ..close();
     } on InputTooLongException catch (e) {
@@ -320,14 +444,15 @@ class ClipboardService {
     String fg = '000000',
     String bg = 'ffffff',
   }) {
-    final img = QrImage(QrCode.fromData(
-      data: text,
-      errorCorrectLevel: QrErrorCorrectLevel.M,
-    ));
+    final img = QrImage(
+      QrCode.fromData(data: text, errorCorrectLevel: QrErrorCorrectLevel.M),
+    );
     final n = img.moduleCount;
     final size = (n + quiet * 2) * scale;
     final buf = StringBuffer();
-    buf.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $size $size">');
+    buf.write(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $size $size">',
+    );
     buf.write('<rect width="$size" height="$size" fill="#$bg"/>');
 
     if (style == 'dots') {
@@ -350,7 +475,9 @@ class ClipboardService {
           if (img.isDark(row, col)) {
             final x = (col + quiet) * scale;
             final y = (row + quiet) * scale;
-            buf.write('<rect x="$x" y="$y" width="$scale" height="$scale" rx="$rx" fill="#$fg"/>');
+            buf.write(
+              '<rect x="$x" y="$y" width="$scale" height="$scale" rx="$rx" fill="#$fg"/>',
+            );
           }
         }
       }
@@ -425,9 +552,9 @@ h1{font-size:20px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
 .status{font-size:13px;color:#666;margin-bottom:16px;padding:8px 12px;background:#fff;border-radius:8px;border:1px solid #ddd}
 .status.connected{color:#2e7d32;background:#e8f5e9;border-color:#a5d6a7}
 .status.disconnected{color:#c62828;background:#ffebee;border-color:#ef9a9a}
-.tip{font-size:12px;color:#999;margin-bottom:12px}
-textarea{width:100%;min-height:120px;padding:12px;font-size:15px;border:1px solid #ddd;border-radius:8px;resize:vertical;font-family:inherit}
-textarea:focus{outline:none;border-color:#1976d2}
+.tip{font-size:12px;color:#666;margin-bottom:12px}
+textarea{width:100%;min-height:120px;padding:12px;font-size:15px;border:1px solid #666;border-radius:8px;resize:vertical;font-family:inherit}
+textarea::placeholder,.qr-input input::placeholder{color:#666;opacity:1}
 .actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .btn{padding:8px 20px;font-size:14px;border:none;border-radius:6px;cursor:pointer;font-weight:500}
 .btn-primary{background:#1976d2;color:#fff}
@@ -437,39 +564,44 @@ textarea:focus{outline:none;border-color:#1976d2}
 .btn-danger{background:#ffebee;color:#c62828}
 .btn-danger:hover{background:#ffcdd2}
 .clipboard-display{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:16px;min-height:60px;font-size:15px;line-height:1.5;word-break:break-all}
-.clipboard-display:empty::before{content:"暂无内容";color:#bbb}
-.clipboard-display .time{font-size:11px;color:#999;margin-top:8px;display:block}
+#shared-text{white-space:pre-wrap}
+#shared-text:empty::before{content:"暂无内容";color:#666}
+.clipboard-display .time{font-size:12px;color:#666;margin-top:8px;display:block}
+.copy-status{font-size:13px;color:#666;margin-top:8px}
 .qr-opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px;background:#fff;border:1px solid #ddd;border-radius:8px}
 .qr-opts label{font-size:13px;color:#555;display:flex;align-items:center;gap:4px}
-.qr-opts select,.qr-opts input[type=color]{border:1px solid #ddd;border-radius:6px;background:#fff;height:26px}
+.qr-opts select,.qr-opts input[type=color]{border:1px solid #666;border-radius:6px;background:#fff;min-width:44px;min-height:44px}
 .qr-row{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:10px}
-.qr-row .qr-input{display:flex;gap:8px;margin-bottom:10px}
-.qr-row .qr-input input{flex:1;padding:10px;font-size:14px;border:1px solid #ddd;border-radius:6px;font-family:inherit;min-width:0}
-.qr-row .qr-input input:focus{outline:none;border-color:#1976d2}
+.qr-row .qr-input{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.qr-row .qr-input input{flex:1 1 140px;padding:10px;font-size:14px;border:1px solid #666;border-radius:6px;font-family:inherit;min-width:0}
+button:focus,textarea:focus,input:focus,select:focus{outline:2px solid #1976d2;outline-offset:2px}
 .qr-out{display:none;text-align:center}
-.qr-out img{width:220px;height:220px;background:#fff;border:1px solid #ddd;border-radius:8px;object-fit:contain}
+.qr-out img{width:220px;max-width:100%;height:auto;aspect-ratio:1;background:#fff;border:1px solid #ddd;border-radius:8px;object-fit:contain}
 .qr-out .dl{display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:6px 16px;font-size:13px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#333;cursor:pointer;text-decoration:none}
 .qr-out .dl:hover{background:#f0f0f0}
+button,.qr-out .dl{min-width:44px;min-height:44px;font-family:inherit}
 </style>
 </head>
 <body>
 <h1>🧰 工具页</h1>
 
-<div class="tabs">
-  <button class="tab active" id="tab-clipboard" onclick="switchTab('clipboard')">📋 剪贴板</button>
-  <button class="tab" id="tab-qr" onclick="switchTab('qr')">🔳 二维码</button>
+<div class="tabs" role="group" aria-label="工具">
+  <button class="tab active" id="tab-clipboard" aria-pressed="true" aria-controls="pane-clipboard" onclick="switchTab('clipboard')">📋 剪贴板</button>
+  <button class="tab" id="tab-qr" aria-pressed="false" aria-controls="pane-qr" onclick="switchTab('qr')">🔳 二维码</button>
 </div>
 
 <!-- ── 剪贴板 ── -->
 <div id="pane-clipboard" class="pane active">
-  <div id="status" class="status disconnected">⏳ 连接中…</div>
+  <div id="status" role="status" aria-live="polite" class="status disconnected">⏳ 连接中…</div>
   <div class="tip">⚠️ 剪贴板内容对内网可见，请勿粘贴敏感信息</div>
-  <div id="display" class="clipboard-display"><span class="time" id="time"></span></div>
-  <textarea id="input" placeholder="粘贴文本到这里…"></textarea>
+  <div id="display" class="clipboard-display"><span id="shared-text"></span><span class="time" id="time"></span></div>
+  <textarea id="input" aria-label="共享剪贴板文本" placeholder="粘贴文本到这里…"></textarea>
   <div class="actions">
     <button class="btn btn-primary" onclick="send()">📤 发送到共享剪贴板</button>
-    <button class="btn btn-secondary" onclick="copyFromDisplay()">📋 复制到本机</button>
+    <button class="btn btn-secondary" onclick="copySharedText()">📋 复制到本机</button>
   </div>
+  <div id="copy-status" class="copy-status" role="status" aria-live="polite"></div>
+  <textarea id="manual-copy" aria-label="手动复制共享剪贴板文本" readonly style="display:none"></textarea>
 </div>
 
 <!-- ── 二维码生成 ── -->
@@ -494,7 +626,10 @@ textarea:focus{outline:none;border-color:#1976d2}
 var ws = null;
 var statusEl = document.getElementById('status');
 var displayEl = document.getElementById('display');
+var textEl = document.getElementById('shared-text');
 var timeEl = document.getElementById('time');
+var copyStatusEl = document.getElementById('copy-status');
+var manualCopyEl = document.getElementById('manual-copy');
 var inputEl = document.getElementById('input');
 var reconnectTimer = null;
 var sharedText = '';
@@ -507,6 +642,7 @@ function switchTab(name) {
   var tabs = document.querySelectorAll('.tab');
   for (var j = 0; j < tabs.length; j++) {
     tabs[j].className = 'tab' + (tabs[j].id === 'tab-' + name ? ' active' : '');
+    tabs[j].setAttribute('aria-pressed', tabs[j].id === 'tab-' + name ? 'true' : 'false');
   }
 }
 
@@ -523,11 +659,11 @@ function addQrRow() {
   row.className = 'qr-row';
   row.innerHTML =
     '<div class="qr-input">' +
-      '<input type="text" placeholder="输入文字或网址…">' +
+      '<input type="text" aria-label="二维码文字或网址" placeholder="输入文字或网址…">' +
       '<button class="btn btn-primary" onclick="genQr(this)">生成</button>' +
-      '<button class="btn btn-danger" onclick="delQrRow(this)">✕</button>' +
+      '<button class="btn btn-danger" onclick="delQrRow(this)" aria-label="删除这一行" title="删除这一行">✕</button>' +
     '</div>' +
-    '<div class="qr-out"><img alt="二维码"><br><a class="dl" onclick="downloadQr(this)">⬇ 下载 SVG</a></div>';
+    '<div class="qr-out"><img alt="二维码"><br><button class="dl" onclick="downloadQr(this)">⬇ 下载 SVG</button></div>';
   rows.appendChild(row);
   row.querySelector('input').focus();
 }
@@ -568,14 +704,15 @@ function connect() {
   ws.onmessage = function(e) {
     try {
       var msg = JSON.parse(e.data);
-      if (msg.type === 'clipboard') {
-        sharedText = msg.text;
-        displayEl.textContent = sharedText;
-        if (msg.ts) {
-          var d = new Date(msg.ts);
-          timeEl.textContent = '同步于 ' + d.toLocaleString();
+      if (msg.type === 'clipboard' && typeof msg.text === 'string') {
+        if (sharedText !== msg.text) {
+          sharedText = msg.text;
+          textEl.textContent = sharedText;
+          copyStatusEl.textContent = '';
+          manualCopyEl.style.display = 'none';
+          manualCopyEl.value = '';
         }
-        displayEl.appendChild(timeEl);
+        timeEl.textContent = msg.ts ? '同步于 ' + new Date(msg.ts).toLocaleString() : '';
       }
     } catch(err) {}
   };
@@ -589,7 +726,7 @@ function connect() {
 }
 
 function send() {
-  var text = inputEl.value.trim();
+  var text = inputEl.value;
   if (!text) return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({type: 'set', text: text}));
@@ -597,27 +734,58 @@ function send() {
   }
 }
 
-async function copyFromDisplay() {
+// Keep this inline script ES5-compatible: older WebViews must still connect
+// and generate QR codes even when the modern Clipboard API is unavailable.
+function copySharedText() {
   var text = sharedText;
   if (!text) return;
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      var copyInput = document.createElement('textarea');
+  function copied() {
+    manualCopyEl.style.display = 'none';
+    manualCopyEl.value = '';
+    copyStatusEl.textContent = '已复制';
+  }
+  function fallback() {
+    var copyInput = document.createElement('textarea');
+    var previousFocus = document.activeElement;
+    var copiedText = false;
+    try {
       copyInput.value = text;
       copyInput.setAttribute('readonly', '');
       copyInput.style.position = 'fixed';
       copyInput.style.opacity = '0';
+      copyInput.style.fontSize = '16px';
       document.body.appendChild(copyInput);
+      copyInput.focus();
       copyInput.select();
-      var copied = document.execCommand('copy');
-      copyInput.remove();
-      if (!copied) throw new Error('Copy command failed');
+      copyInput.setSelectionRange(0, text.length);
+      copiedText = document.execCommand('copy');
+    } catch (err) {
+    } finally {
+      if (copyInput.parentNode) copyInput.parentNode.removeChild(copyInput);
+      if (previousFocus && previousFocus.focus) previousFocus.focus();
     }
-  } catch (err) {
-    window.prompt('请手动复制共享内容：', text);
+    if (copiedText) {
+      copied();
+    } else {
+      // A DOM range drops a trailing newline in some browsers. A visible
+      // readonly textarea retains the exact value for a manual copy gesture.
+      try {
+        manualCopyEl.value = text;
+        manualCopyEl.style.display = 'block';
+        manualCopyEl.focus();
+        manualCopyEl.select();
+        manualCopyEl.setSelectionRange(0, text.length);
+      } catch (err) {}
+      copyStatusEl.textContent = '自动复制失败，已选中下方文本，请手动复制';
+    }
   }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(copied, fallback);
+      return;
+    }
+  } catch (err) {}
+  fallback();
 }
 
 addQrRow();

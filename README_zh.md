@@ -15,7 +15,7 @@
 [![Linux](https://img.shields.io/badge/Linux-green)](https://github.com/zocs/fileinfra/releases)
 [![macOS](https://img.shields.io/badge/macOS-yellow)](https://github.com/zocs/fileinfra/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/zocs/fileinfra/build.yml?label=build)](https://github.com/zocs/fileinfra/actions)
-[![F-Droid](https://img.shields.io/badge/F-Droid-pending-blue)](https://gitlab.com/fdroid/fdroiddata)
+[![F-Droid](https://img.shields.io/badge/F-Droid-preparation-grey)](./.fdroid.yml)
 
 [English](./README.md) · [隐私政策](./PRIVACY.md) · [📥 下载](https://github.com/zocs/fileinfra/releases)
 
@@ -45,11 +45,11 @@
 | 🔗 **打开就用** | 扫码或输入地址，对端零门槛 |
 | 📋 **共享剪贴板与工具页** | 和局域网浏览器实时同步文本，并离线生成二维码 |
 | 📲 **Android 快捷控制** | 可从通知栏或快捷设置磁贴启停服务 |
-| 🔐 **安全可控** | 可选密码认证、CORS 控制 |
+| 🔐 **文件访问控制** | 可选密码认证、可配置操作权限 |
 | 🔀 **权限细粒度** | 上传、删除、搜索、归档下载，逐项开关 |
 | 🎨 **自由配色** | 6 种预设 + 自定义色盘（任意颜色）+ 深色/浅色模式 |
 | 🌐 **三语支持** | 简体中文 · 繁體中文 · English |
-| 📦 **零依赖** | 自包含，装完就能用 |
+| 📦 **内置文件服务** | 无需单独安装 dufs；Linux 需要桌面运行库 |
 
 ---
 
@@ -72,15 +72,18 @@
 
 | 平台 | 文件 | |
 |:---|:---|:---:|
-| 🪟 **Windows** | `fileinfra-*-windows-x64-setup.exe`（安装版）或 `.zip`（便携版） | ✅ 已测试 |
-| 🤖 **Android** | `fileinfra-*-android-universal.apk`（arm64-v8a · armeabi-v7a · x86_64） | ✅ 已测试 |
-| 🐧 **Linux x64** | `.AppImage`（零依赖）或 `.deb` | ✅ 已测试 |
-| 🐧 **Linux ARM64** | `.AppImage` 或 `.deb`（理论兼容麒麟/UOS） | ✅ 已测试 |
-| 🍎 **macOS** | `FileInfra-*-macos-arm64.zip` | ⚠️ 未实测 |
+| 🪟 **Windows x64** | `fileinfra-*-windows-x64-setup.exe`（安装版）或 `.zip`（便携版） | Windows 10+；附带 VC++ 运行库 |
+| 🤖 **Android** | `-android-universal.apk`，或 `-android-arm64.apk`、`-android-armv7.apk`、`-android-x86_64.apk` | Android 7.0+（API 24） |
+| 🐧 **Linux x64** | `.AppImage`、`.deb`、`.tar.gz`；旧发行版选择 `-compat` | 需要桌面运行库 |
+| 🐧 **Linux ARM64** | `.AppImage`、`.deb`、`.tar.gz` | 需按发行版与设备验证 |
+| 🍎 **macOS（Apple 芯片）** | `FileInfra-*-macos-arm64.zip` | macOS 13+；待实机验证 |
+| 🍎 **macOS（Intel）** | `FileInfra-*-macos-x64.zip` | macOS 13+；待实机验证 |
 
 > 📥 [去 Releases 下载最新版](https://github.com/zocs/fileinfra/releases)
 >
-> 🤖 [F-Droid](https://f-droid.org/) 正在审核中
+> F-Droid 配方和无签名构建路径已准备，上架已推迟，目前未在 F-Droid 目录提供下载。
+
+Windows 发布包是 x64 图形程序；当前 Flutter SDK 不支持 Windows 32 位 x86 目标。Linux `.deb` 根据实际发布的 ELF 文件声明 glibc/libstdc++ 最低版本，x64 compat 版面向 glibc 2.27+、libstdc++ 5.1+ 环境；AppImage 仍有这些系统要求。麒麟/UOS 是否可运行取决于发行版版本和桌面库。macOS 包使用 ad-hoc 签名，未经过 Developer ID 签名或公证。iOS ZIP 属于实验性无签名构建产物，尚未验证安装和文件服务运行。
 
 ### 怎么用
 
@@ -89,7 +92,7 @@
 3. 其他设备扫码或输地址
 4. 开传 — 就这么简单！
 
-服务运行后，可在应用中打开独立的「工具页」地址，使用局域网共享剪贴板和离线二维码生成器。剪贴板服务端口为文件服务端口 + 2000（例如文件服务 `5000` → 工具页 `7000`；端口被占用时会顺延）。Android 通知栏可将本机剪贴板发送到共享页面，或将共享文本拉取到本机；快捷设置磁贴可启停上次配置的分享。
+服务运行后，可在应用中打开独立的「工具页」地址，使用局域网共享剪贴板和离线二维码生成器。工具端口从文件服务端口 + 2000 开始选择（例如 `5000` → `7000`；被占用或属于浏览器禁用端口时会调整）。Android 通知栏「发送剪贴板」会打开并聚焦 FileInfra，再读取一次本机剪贴板；「拉取剪贴板」将共享文本写入本机。快捷设置磁贴按保存的设置启停上次成功启动的文件分享；仅通过磁贴启动时，需要打开 FileInfra 恢复工具页监听。
 
 > 共享剪贴板对能访问工具页地址的设备开放。请勿在其中粘贴密码、令牌等敏感信息。
 
@@ -105,24 +108,24 @@
 | 📱 **手机热点** | 一台开热点，其他设备加入就能用 |
 | 🌍 **远程访问** | 搭配 ZeroTier、Tailscale、EasyTier 等组网工具 |
 
-> 🔒 **文件只在设备之间传输，不经过任何第三方服务器。**
+> 文件和剪贴板文本直接传给你连接的设备，FileInfra 不会将它们发送至第三方服务。目前应用使用 HTTP，文件和剪贴板内容不加密；如需加密，应使用可信 VPN 或由网络提供保护。
 
 ---
 
 ## 🔒 安全提醒
 
-> ⚠️ 文件服务和工具页会通过其绑定的网络接口访问（文件服务默认监听所有网卡 `0.0.0.0`）。
+> ⚠️ 文件服务和工具页都监听所有 IPv4 接口（`0.0.0.0`），包括 Wi-Fi、热点和 VPN 接口。目前应用没有限制绑定地址的设置。
 
 | 网络环境 | 建议 |
 |:---|:---:|
-| 家庭 WiFi | ✅ 放心用，局域网内可访问 |
-| 公共 WiFi | ⚠️ 建议开密码认证 |
+| 家庭 WiFi | 仅向可信设备开放 |
+| 公共 WiFi | 使用可信 VPN；文件密码不能保护工具页 |
 | 公司网络 | ⚠️ 留意防火墙策略 |
 | 公网暴露 | ❌ 不推荐，远程请用 VPN |
 
 **建议习惯：**
 1. 不可信网络务必启用密码认证，并谨慎设置上传/删除权限。
-2. 注意：文件服务的密码认证不保护独立的剪贴板/工具页。
+2. 文件密码不保护独立的剪贴板/工具页。工具 API 的浏览器 Origin 检查用于阻止其他网站调用，不是设备或原生客户端身份认证。
 3. 用完及时停掉服务，并定期查看访问日志。
 
 ---
@@ -137,9 +140,7 @@
 
 ### Android — 通知栏剪贴板按钮
 
-通知栏的「发送剪贴板」按钮读取系统剪贴板，**Android 10+ 上仅前台应用可读剪贴板**，后台读取时静默返回空。
-如果点击「发送」后工具页未收到内容，请将 FileInfra 切换到前台再试。
-「拉取剪贴板」写入系统剪贴板不受此限制（Android 10+ 会显示剪贴板访问提示）。
+「发送剪贴板」会打开 FileInfra，等待窗口获得焦点后读取剪贴板，以适应 Android 10+ 的前台读取限制；锁屏时请先解锁。「拉取剪贴板」只写入共享文本，无需后台读取。可在设置中关闭剪贴板按钮；如果文件服务仅通过磁贴启动，请打开应用以初始化工具页。
 
 ### 端口被占用
 
@@ -155,11 +156,13 @@ chmod +x fileinfra-*.AppImage
 ./fileinfra-*.AppImage
 ```
 
+按发行版安装 FUSE 运行库，或使用 AppImage 的 `--appimage-extract-and-run` 选项。若报错包含 `GLIBC_*` 或 `GLIBCXX_*`，请选择 x64 compat 包或更新发行版；安装 FUSE 不能解决系统 C 库版本不兼容。
+
 ### macOS — 提示"无法验证开发者"
 
 **解决：**
 ```bash
-xattr -d com.apple.quarantine FileInfra.app
+xattr -cr FileInfra.app
 ```
 
 ### Windows — 其他设备连不上
@@ -180,7 +183,7 @@ A: 可以。选择一个单文件后，浏览器端只会暴露这个文件本�
 A: 默认只能局域网。远程的话搭配 ZeroTier / Tailscale / EasyTier 之类的 VPN。
 
 **Q: 支持 HTTPS 吗？**
-A: 目前还没有，后续会加。
+A: dufs 命令行服务支持 TLS。FileInfra 的文件服务和工具页目前都使用 HTTP，尚未提供 HTTPS 设置。
 
 **Q: 最大能传多大的文件？**
 A: 理论上没有限制。实测 70GB+ 压缩包单文件在千兆局域网下全程跑满带宽，大文件下载时加载文件信息会有短暂等待，属正常现象。实际速度取决于文件系统、硬盘读写速率和 Wi-Fi 带宽。
@@ -198,8 +201,9 @@ A: 不会！文件只在设备之间传输，不经过任何服务器。
 ### 环境要求
 
 - Flutter SDK 3.47.0（与 CI 构建版本一致）
+- Rust 1.99.1（CI 与 F-Droid 准备配方固定版本）
 - Windows: VS Build Tools 2022 (C++ workload)
-- Android: Android SDK, NDK
+- Android: JDK 17、Android SDK、NDK（CI 预期 r29）
 - Linux: clang, lld, llvm, libgtk-3-dev
 - macOS: Xcode
 
@@ -215,9 +219,16 @@ flutter run -d windows
 flutter run -d android
 
 # 构建
+bash scripts/build_dufs.sh windows-x86_64
 flutter build windows --release
+# Android universal 包需要先编译三个 ABI 的核心。
+bash scripts/build_dufs.sh android-arm64
+bash scripts/build_dufs.sh android-arm
+bash scripts/build_dufs.sh android-x86_64
 flutter build apk --release
 ```
+
+Android 正常 release 构建通过 `KEYSTORE_FILE`、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD` 使用现有签名密钥。历史密钥别名默认是 `inout`，这是 keystore 内部标识，与应用名无关。明确需要无签名的本地/F-Droid 准备构建时，设置 `FILEINFRA_UNSIGNED_RELEASE=1`；GitHub release APK 会校验原有签名证书连续性。
 
 ### 构建脚本
 
@@ -226,15 +237,16 @@ flutter build apk --release
 bash scripts/build_linux.sh x86_64
 bash scripts/build_linux.sh aarch64
 
-# macOS (ARM64)
+# macOS（Apple 芯片 arm64 或 Intel x64）
 bash scripts/build_macos.sh aarch64
+bash scripts/build_macos.sh x86_64
 ```
 
 输出：AppImage, deb, rpm, tar.gz（Linux）和 zip（macOS）。
 
 ### CI/CD
 
-GitHub Actions 在 tag 推送（`v*`）时自动构建所有平台并创建 release。
+GitHub Actions 在手动触发或推送 tag 时运行分析、Flutter/浏览器回归、Android 原生测试、打包检查和各平台构建。发布 tag（`v*`）只有在全部必需任务通过后才创建 release。先用 `gh workflow run build.yml --ref <branch> -f note="<用途>"` 验证分支；下载产物附带 SHA-256 校验文件。完整流程见 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md)。
 
 ### 项目结构
 
@@ -256,9 +268,10 @@ lib/
 │   └── color_picker_dialog.dart    # 自绘 HSV 色盘（无依赖）
 └── services/
     ├── dufs_service.dart           # dufs 生命周期（平台分发）
+    ├── clipboard_service.dart      # 局域网剪贴板、工具页与二维码端点
     └── dufs_ffi.dart               # FFI 绑定（桌面端）
 scripts/
-├── build_dufs.sh                   # 跨平台编译 dufs（7 平台）
+├── build_dufs.sh                   # 按目标平台/ABI 编译固定 fork 源码
 ├── build_linux.sh                  # Linux 打包（AppImage/deb）
 ├── build_macos.sh                  # macOS 打包
 └── dufs-ffi/lib.rs                 # Rust FFI 封装

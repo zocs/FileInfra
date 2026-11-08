@@ -4,7 +4,7 @@ SetCompressor /SOLID lzma
 
 !define APP_NAME "FileInfra"
 !ifndef APP_VERSION
-  !define APP_VERSION "0.5.12"
+  !error "APP_VERSION is required; pass /DAPP_VERSION=<pubspec version> to makensis"
 !endif
 !define APP_PUBLISHER "zocs"
 !define APP_URL "https://github.com/zocs/fileinfra"

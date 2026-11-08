@@ -122,27 +122,39 @@ class ServerConfig {
 
   /// 从 JSON Map 创建实例
   factory ServerConfig.fromJson(Map<String, dynamic> json) => ServerConfig(
-    path: json['path'] as String? ?? '',
-    port: json['port'] as int? ?? 5000,
-    allowUpload: json['allowUpload'] as bool? ?? false,
-    allowDelete: json['allowDelete'] as bool? ?? false,
-    allowSearch: json['allowSearch'] as bool? ?? false,
-    allowArchive: json['allowArchive'] as bool? ?? false,
-    allowSymlink: json['allowSymlink'] as bool? ?? false,
-    readonly: json['readonly'] as bool? ?? true,
-    cors: json['cors'] as bool? ?? false,
-    language: json['language'] as String? ?? 'zh',
-    themeMode: json['themeMode'] as String? ?? 'system',
-    colorScheme: json['colorScheme'] as String? ?? 'coral',
-    setupDone: json['setupDone'] as bool? ?? false,
-    closeAction: json['closeAction'] as String? ?? 'ask',
-    shareSingleFile: json['shareSingleFile'] as bool? ?? false,
-    hideSystemFiles: json['hideSystemFiles'] as bool? ?? true,
-    renderTryIndex: json['renderTryIndex'] as bool? ?? false,
-    preferredAddress: json['preferredAddress'] as String?,
-    customColor: json['customColor'] as int? ?? 0xFFFF6B5A,
-    notifClipboard: json['notifClipboard'] as bool? ?? true,
+    path: _jsonValue(json, 'path', ''),
+    port: _jsonPort(json),
+    allowUpload: _jsonValue(json, 'allowUpload', false),
+    allowDelete: _jsonValue(json, 'allowDelete', false),
+    allowSearch: _jsonValue(json, 'allowSearch', false),
+    allowArchive: _jsonValue(json, 'allowArchive', false),
+    allowSymlink: _jsonValue(json, 'allowSymlink', false),
+    readonly: _jsonValue(json, 'readonly', true),
+    cors: _jsonValue(json, 'cors', false),
+    language: _jsonValue(json, 'language', 'zh'),
+    themeMode: _jsonValue(json, 'themeMode', 'system'),
+    colorScheme: _jsonValue(json, 'colorScheme', 'coral'),
+    setupDone: _jsonValue(json, 'setupDone', false),
+    closeAction: _jsonValue(json, 'closeAction', 'ask'),
+    shareSingleFile: _jsonValue(json, 'shareSingleFile', false),
+    hideSystemFiles: _jsonValue(json, 'hideSystemFiles', true),
+    renderTryIndex: _jsonValue(json, 'renderTryIndex', false),
+    preferredAddress: _jsonValue<String?>(json, 'preferredAddress', null),
+    customColor: _jsonValue(json, 'customColor', 0xFFFF6B5A),
+    notifClipboard: _jsonValue(json, 'notifClipboard', true),
   );
+
+  // Persisted settings can come from older versions or be partially corrupted.
+  // Default each invalid field without losing the remaining valid settings.
+  static T _jsonValue<T>(Map<String, dynamic> json, String key, T fallback) {
+    final value = json[key];
+    return value is T ? value : fallback;
+  }
+
+  static int _jsonPort(Map<String, dynamic> json) {
+    final port = _jsonValue(json, 'port', 5000);
+    return port >= 1 && port <= 65535 ? port : 5000;
+  }
 
   /// 从 SharedPreferences 加载配置。
   ///
@@ -150,18 +162,21 @@ class ServerConfig {
   /// secure storage 抛错）都会白屏启动——所有失败路径都降级为默认值/无凭据，
   /// 而不是向上抛。
   static Future<ServerConfig> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString('server_config');
+    SharedPreferences? prefs;
     Map<String, dynamic>? json;
-    if (jsonStr != null) {
-      try {
-        json = jsonDecode(jsonStr) as Map<String, dynamic>;
-      } catch (e) {
-        debugPrint('server_config JSON corrupt, falling back to defaults: $e');
+    try {
+      prefs = await SharedPreferences.getInstance();
+      final stored = prefs.get('server_config');
+      if (stored is String) {
+        final decoded = jsonDecode(stored);
+        if (decoded is Map<String, dynamic>) json = decoded;
       }
+    } catch (e) {
+      debugPrint('server_config load failed, falling back to defaults: $e');
     }
     final config = json != null ? ServerConfig.fromJson(json) : ServerConfig();
-    final legacyAuth = json?['auth'] as String?;
+    final legacyValue = json?['auth'];
+    final legacyAuth = legacyValue is String ? legacyValue : null;
     String? secureAuth;
     try {
       secureAuth = await _secureStorage.read(key: _authStorageKey);
@@ -173,7 +188,8 @@ class ServerConfig {
     // Only migrate legacy → secure storage when secure storage doesn't already
     // have a value. Otherwise we'd overwrite a fresh credential set in the new
     // version with a stale one left in SharedPreferences.
-    if (secureAuth == null &&
+    if (prefs != null &&
+        secureAuth == null &&
         legacyAuth != null &&
         legacyAuth.isNotEmpty) {
       try {

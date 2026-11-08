@@ -51,9 +51,65 @@ void main() {
       expect(LogPage.resolveTarget('/a.txt', ''), isNull);
     });
 
-    test('单文件分享：root 是文件时直接返回 root', () {
+    test('missing root returns null', () {
+      expect(LogPage.resolveTarget('/a.txt', '${root.path}/missing'), isNull);
+    });
+
+    test('单文件分享：所有请求返回所选文件的真实路径', () {
       final single = '${root.path}/a.txt';
-      expect(LogPage.resolveTarget('/anything', single), single);
+      expect(
+        LogPage.resolveTarget('/anything', single),
+        File(single).resolveSymbolicLinksSync(),
+      );
+    });
+  });
+
+  group('LogPage.resolveTarget filesystem links', () {
+    test('outside directory link cannot expose a file', () {
+      Link('${root.path}/link').createSync(outside.path);
+      expect(LogPage.resolveTarget('/link/secret.txt', root.path), isNull);
+    });
+
+    test('outside file link cannot expose a file', () {
+      Link('${root.path}/secret.txt').createSync('${outside.path}/secret.txt');
+      expect(LogPage.resolveTarget('/secret.txt', root.path), isNull);
+    });
+
+    test('inside link resolves to an existing canonical target', () {
+      Link('${root.path}/linked.txt').createSync('${root.path}/a.txt');
+      final target = LogPage.resolveTarget('/linked.txt', root.path);
+      expect(target, File('${root.path}/a.txt').resolveSymbolicLinksSync());
+      expect(File(target!).readAsStringSync(), 'a');
+    });
+
+    test('symlinked selected root uses the real root for containment', () {
+      final selectedRoot = Link('${outside.path}/selected');
+      selectedRoot.createSync(root.path);
+      expect(
+        LogPage.resolveTarget('/a.txt', selectedRoot.path),
+        File('${root.path}/a.txt').resolveSymbolicLinksSync(),
+      );
+      Link('${root.path}/escape').createSync(outside.path);
+      expect(
+        LogPage.resolveTarget('/escape/secret.txt', selectedRoot.path),
+        isNull,
+      );
+    });
+
+    test('dangling links and missing link descendants return null', () {
+      Link('${root.path}/dangling').createSync('${outside.path}/missing');
+      Link('${root.path}/inside').createSync(root.path);
+      expect(LogPage.resolveTarget('/dangling', root.path), isNull);
+      expect(LogPage.resolveTarget('/inside/missing', root.path), isNull);
+    });
+
+    test('selected single-file link resolves to the selected file', () {
+      final selected = Link('${root.path}/single.txt');
+      selected.createSync('${outside.path}/secret.txt');
+      expect(
+        LogPage.resolveTarget('/anything', selected.path),
+        File('${outside.path}/secret.txt').resolveSymbolicLinksSync(),
+      );
     });
   });
 
@@ -77,6 +133,34 @@ void main() {
       expect(LogPage.resolveTarget('/%2e%2e/x', root.path), isNull);
       expect(LogPage.resolveTarget('/%2E%2E%2Fx', root.path), isNull);
     });
+
+    test(
+      'encoded traversal is rejected even if its literal filename exists',
+      () {
+        Directory('${root.path}/%2e%2e').createSync();
+        File('${root.path}/%2e%2e/a.txt').writeAsStringSync('literal');
+        expect(LogPage.resolveTarget('/%2e%2e/a.txt', root.path), isNull);
+      },
+    );
+
+    test(
+      'links do not permit dot segments, encoded or backslash traversal',
+      () {
+        Link('${root.path}/inside').createSync(root.path);
+        for (final request in [
+          '/inside/../a.txt',
+          '/inside/%2e%2e/a.txt',
+          r'/inside/..\a.txt',
+          '/inside/%2e%2e%5ca.txt',
+        ]) {
+          expect(
+            LogPage.resolveTarget(request, root.path),
+            isNull,
+            reason: request,
+          );
+        }
+      },
+    );
 
     test('反斜杠形式的 .. 被拒', () {
       expect(LogPage.resolveTarget(r'/..\x', root.path), isNull);

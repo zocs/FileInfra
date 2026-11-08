@@ -1,1 +1,1 @@
-Fixed the Tools page copy button copying its label instead of shared text; improved clipboard fallback
+Fixed the Tools page copy button appending the synchronization timestamp to shared text; added a fallback for HTTP pages without the browser Clipboard API

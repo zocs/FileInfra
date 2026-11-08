@@ -243,6 +243,9 @@ class _FileInfraAppState extends State<FileInfraApp> with TrayListener, WindowLi
 
   void _onSetupDone() {
     setState(() {
+      _themeMode = _themeModeFromString(widget.config.themeMode);
+      _colorScheme = widget.config.colorScheme;
+      _language = widget.config.language;
       _setupDone = true;
     });
   }
